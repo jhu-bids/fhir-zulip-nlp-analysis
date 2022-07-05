@@ -20,6 +20,7 @@ from datetime import datetime
 # Vars
 PKG_DIR = os.path.dirname(os.path.realpath(__file__))
 PROJECT_DIR = os.path.join(PKG_DIR, '..')
+ZULIP_CONFIG_PATH = os.path.join(PROJECT_DIR, 'zuliprc')
 CONFIG = {
     'outdir': PROJECT_DIR,
     'report1_filename': 'fhir-zulip-nlp - frequencies and date ranges.csv',
@@ -82,7 +83,7 @@ def data(key):
     return vals
 
 def messagepull(anchor,before,after,keyword):
-    client = zulip.Client(config_file="~/fhir-zulip-nlp-analysis/zuliprc")
+    client = zulip.Client(config_file=ZULIP_CONFIG_PATH)
     request = {
             "anchor": anchor,
             "num_before": before,
