@@ -15,7 +15,7 @@ from typing import Dict
 
 import pandas as pd
 import zulip
-
+from datetime import datetime
 
 # Vars
 PKG_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -24,7 +24,7 @@ CONFIG = {
     'outdir': PROJECT_DIR,
     'report1_filename': 'fhir-zulip-nlp - frequencies and date ranges.csv',
     'report2_filename': 'fhir-zulip-nlp - age and date analyses.csv',
-    'zuliprc_path': os.path.join(PROJECT_DIR, '.zuliprc')  # rc = "runtime config"
+    'zuliprc_path': os.path.join(PROJECT_DIR, 'zuliprc')  # rc = "runtime config"
 }
 
 
@@ -34,15 +34,9 @@ def analysis_frequencies(data, outpath: str = None) -> pd.DataFrame:
     """Analyze counts and date ranges
     Requirements 1-5
     """
-    # @Rohan: I think that the data you get back from Zulip is likely to be a Python dictionary. There are several ways
-    # to get your data into a dataframe. Personally, Here's the way that I find the easiest:
-    # 1. Put all of your "rows" into a python list:
-    # rows = [{'keyword': 'SNOMED', 'count': 100}, {'keyword': 'ICD10', 'count': 50}]
-    # 2. then you can simply convert this kind of structure shown above into a dataframe like this:
-    # df = pd.DataFrame(rows)
     print(data)
     df = pd.DataFrame()
-
+    
     if outpath:
         df.to_csv(outpath, index=False)
     return df
@@ -61,63 +55,120 @@ def analysis_age_and_date(data, outpath: str = None) -> pd.DataFrame:
 
 
 def normalize_data(data):
-    """Normalize data
-    @Rohan: I created this function as a separate step to take the data you got from Zulip, and maybe transform it
-    into something easier to work with. Maybe this step is not necessary, though. Pehraps the data you get back from
-    the Zulip API will be in an easy format to work with.
-    """
+    """Normalize data"""
     return data
 
 
 # TODO: will probably want to pass (i) chat.fhir.org, (ii) list of streams
-def get_data(zuliprc_path: str):
+def data(key):
     """Fetch data from API
     Resources
       - Get all streams (probably not needed): https://zulip.com/api/get-streams
-    """
-    data = None  # temp; dk what format the data will be in yet
+    """    
+    bob = False
+    i = 1
+    while True:
+        if bob:
+            break
+        res = messagepull(0,0,i,key)
+        allmess = res['messages']
+        i+=1
+        bob = res['found_newest']
+    
+    newest = timechange(messagepull('newest',1,0,key)['messages'][0]['timestamp'])
+    oldest = timechange(messagepull('oldest',0,1,key)['messages'][0]['timestamp'])
+    
+    vals = {'name': key, 'number of occurences': len(allmess), 'most recent message': newest, 'oldest message' : oldest}
+    return vals
 
-    # Initialize client
-    client = zulip.Client(config_file=zuliprc_path)
+def messagepull(anchor,before,after,keyword):
+    client = zulip.Client(config_file="~/fhir-zulip-nlp-analysis-main/zuliprc") 
+    request = {
+            "anchor": anchor,
+            "num_before": before,
+            "num_after": after,
+            "narrow": [
+                {"operator": "stream", "operand": "terminology"},
+                {"operator": "search", "operand": keyword},
+                ],
+            }
+    result = client.get_messages(request)
+    return result 
 
-    # Get the ID of a given stream
-    # https://zulip.com/api/get-stream-id
-    stream_name = 'terminology'
-    stream_id_response = client.get_stream_id(stream_name)
-    stream_id: str = stream_id_response['id']  # not sure if this is how to get the 'id'. would have to check docs
+def timechange(i): 
+    return datetime.utcfromtimestamp(i).strftime('%Y-%m-%d %H:%M:%S')
 
-    # todo: then fetch stream by id
-    # https://zulip.com/api/get-stream-by-id
-    # I haven't checked docs yet, but I imagine we pass the ID here
-    # It may also be possible that we can get messages back from this as well
-    stream_data = client.get_stream_id(stream_id)
+def alldicts(lis):
+    message_objects = []
+    for i in lis:
+        x = data(i)
+        message_objects.append(x)
+    newmessages = sorted(message_objects, key=lambda d: d['number of occurances'])
+    df = pd.DataFrame(newmessages)
+    df.to_csv('~/fhir-zulip-nlp-analysis-main/zulip_report.csv', index=False)
+    return newmessages
 
-    # todo: might need to fetch topics before querying messages, not sure
-    # https://zulip.com/api/get-stream-topics#get-topics-in-a-stream
-    topics = client.get_stream_topics(stream_id)
-
-    # todo: then fetch messages
-    # Hopefully everything we need is available to request from this endpoint,
-    # https://zulip.com/api/get-messages
-    messages_request_data = {}  # todo: populate w/ stream ID (I think) and other params
-    messages = client.get_messages(messages_request_data)
-
-    return data
-
+'''
+def data(key):
+    client = zulip.Client(config_file="~/fhir-zulip-nlp-analysis-main/zuliprc")
+    vals = {}
+    mess = get_messages_and_topics(key)
+    
+    vals['name'] = key
+    vals['number of occurances']=len(mess)
+    
+    
+    newest = {
+        "anchor": "newest",
+        "num_before": 1,
+        "num_after": 0,
+        "narrow": [
+            {"operator": "stream", "operand": "terminology"},
+            {"operator": "search", "operand": key},
+            ],
+        }
+    result_new = client.get_messages(newest)
+    datenew = result_new['messages'][0]['timestamp']
+    datenew1 = datetime.utcfromtimestamp(datenew).strftime('%Y-%m-%d %H:%M:%S')
+    vals['newest time']=datenew1
+    
+    oldest = {
+        "anchor": "oldest",
+        "num_before": 0,
+        "num_after": 1,
+        "narrow": [
+            {"operator": "stream", "operand": "terminology"},
+            {"operator": "search", "operand": key},
+            ],
+        }
+    result_old = client.get_messages(oldest)
+    dateold = result_old['messages'][0]['timestamp']
+    dateold1 = datetime.utcfromtimestamp(dateold).strftime('%Y-%m-%d %H:%M:%S')
+    vals['oldest time']=dateold1
+    
+    return vals
+'''
 
 def run(outdir: str, report1_filename: str, report2_filename: str, zuliprc_path: str) -> Dict[str, pd.DataFrame]:
     """Run analysis"""
     # Collect and normalize data
     # TODO: (i) get data, (ii) what format to normalize into? dict? df?
-    data = get_data(zuliprc_path)
-    data = normalize_data(data)
+    #part 1 of project
+    '''
+    code_sys_names = ['DICOM','SNOMED','LOINC','ICD','NDC','RxNorm']
+    message_objects = []
+    data(code_sys_names[0])
+    
+    for i in code_sys_names:
+        curr = get_messages_and_topics(i)
+        message_objects.append(curr)
+    '''
+         
+    
 
     # Analyze
-    df1 = analysis_frequencies(data, os.path.join(outdir, report1_filename))
-    df2 = analysis_age_and_date(data, os.path.join(outdir, report2_filename))
-
-    # how to save to csv, example
-    df1.to_csv(os.path.join(PROJECT_DIR, 'my_csv.csv'), index=False)
+    df1 = analysis_frequencies( os.path.join(outdir, report1_filename))
+    df2 = analysis_age_and_date( os.path.join(outdir, report2_filename))
 
     # Return
     report = {
@@ -130,3 +181,15 @@ def run(outdir: str, report1_filename: str, report2_filename: str, zuliprc_path:
 # Execution
 if __name__ == '__main__':
     run(**CONFIG)
+    codes = ['DICOM','SNOMED','LOINC','ICD','NDC','RxNorm']
+    # message_objects = []
+    # for i in code_sys_names:
+    #     x = data(i)
+    #     message_objects.append(x)
+    # newmessages = sorted(message_objects, key=lambda d: d['number of occurances'])
+    # df = pd.DataFrame(newmessages)
+    # df.to_csv('~/fhir-zulip-nlp-analysis-main/zulip_report.csv', index=False)
+    x = alldicts(codes)
+    print(x)     
+    
+   
