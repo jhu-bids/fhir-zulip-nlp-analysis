@@ -33,3 +33,4 @@ junk
 *.ipynb
 scripts/old-vsac-api-scripts/tgt.txt
 .zuliprc
+zuliprc

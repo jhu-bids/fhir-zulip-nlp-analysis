@@ -82,7 +82,7 @@ def data(key):
     return vals
 
 def messagepull(anchor,before,after,keyword):
-    client = zulip.Client(config_file="~/fhir-zulip-nlp-analysis-main/zuliprc") 
+    client = zulip.Client(config_file="~/fhir-zulip-nlp-analysis/zuliprc")
     request = {
             "anchor": anchor,
             "num_before": before,
