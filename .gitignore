@@ -16,6 +16,7 @@ tags
 MANIFEST
 
 # Custom
+/*.csv
 /*.json
 */cache/*
 !*/cache/.keep
