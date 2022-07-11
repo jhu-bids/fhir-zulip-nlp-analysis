@@ -39,6 +39,8 @@ CONFIG = {
     'chat_stream_name': 'terminology',
     'num_messages_per_query': 1000,
     'outpath_report1': os.path.join(PROJECT_DIR, 'zulip_report1.csv'),
+    'outpath_errors': os.path.join(PROJECT_DIR, 'zulip_errors.csv'),
+    'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_keywords_with_no_results.csv'),
     'outpath_raw_results': os.path.join(PROJECT_DIR, RAW_RESULTS_FILENAME),
     'cache_outpath': os.path.join(CACHE_DIR, RAW_RESULTS_FILENAME),
 }
@@ -156,32 +158,58 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
 def query_categories(category_keywords: Dict[str, List[str]]) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
-    last_msg_id = 0
     cache_df = pd.DataFrame()
     cache_json_path = CONFIG['cache_outpath'].replace('.csv', '.json')
     cache_json = {cat: {k: [] for k in keywords} for cat, keywords in category_keywords.items()}
     if os.path.exists(CONFIG['cache_outpath']):
         cache_df = pd.read_csv(CONFIG['cache_outpath'])
+
+    # Fetch data for all keywords for all categories
+    last_msg_id = 0
     reports: List[Dict] = []
     messages: List[Dict] = []
+    errors: List[Dict[str, str]] = []
+    no_result_keywords: List[str] = []
     for category, keywords in category_keywords.items():
         for k in keywords:
+            # Get latest message ID from cache
             if len(cache_df) > 0:
                 kw_cache_df = cache_df[cache_df['keyword'] == k]
                 if len(kw_cache_df) > 0:
                     last_msg_id = list(kw_cache_df['id'])[-1]
+            # Get results
             kw_report, kw_messages = query_keyword(keyword=k, anchor=last_msg_id)
+            # Massage
             kw_report = {**kw_report, **{'category': category}}
             kw_messages = [{**x, **{'category': category, 'keyword': k}} for x in kw_messages]
+            # Cache
             cache_json[category][k] = kw_report
+            # Store results
             reports.append(kw_report)
             messages += kw_messages
+            if 'error' in kw_report:
+                errors.append({
+                    'keyword': k,
+                    'error_message': kw_report['error']})
+            if len(kw_report['number of occurrences']) == 0:
+                no_result_keywords.append(k)
 
     # Save outputs
     # TODO: could probably put more of these lines into function as well, and rename it 'format and save'
+    # - errors
+    if errors:
+        df_errors = pd.DataFrame(errors)
+        df_errors.to_csv(CONFIG['outpath_errors'], index=False)
+    # - keywords w/ no results
+    if no_result_keywords:
+        df_no_results = pd.DataFrame()
+        df_no_results['keywords_with_no_results'] = no_result_keywords
+        df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
+    # - report 1
     df_report1 = pd.DataFrame(reports)
     df_report1 = format_df(df_report1)
     df_report1.to_csv(CONFIG['outpath_report1'], index=False)
+    # - raw messages
     df_raw = pd.DataFrame(messages)
     df_raw = format_df(df_raw)
     df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
@@ -189,9 +217,11 @@ def query_categories(category_keywords: Dict[str, List[str]]) -> pd.DataFrame:
     # Save cache
     if not os.path.exists(CACHE_DIR):
         os.mkdir(CACHE_DIR)
+    # - csv
     cache_df_new = pd.concat([cache_df, df_raw])
     cache_df_new = format_df(cache_df_new)
     cache_df_new.to_csv(CONFIG['cache_outpath'], index=False)
+    # - json
     cache_json_old = {}
     if os.path.exists(cache_json_path):
         with open(cache_json_path, 'r') as file:  # just in case useful
