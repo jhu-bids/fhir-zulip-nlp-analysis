@@ -1,10 +1,5 @@
 """FHIR Zulip NLP Analysis
 
-TODO's
-  1. turn into GH issue, link that doc there, and link GH issue here
-  2. set up env and put instructions in readme
-  3. Need to show a report of all queries where keyword returned no messages
-
 Resources:
   1. Project requirements: https://github.com/jhu-bids/fhir-zulip-nlp-analysis/issues/1
   2. Zulip API docs: https://zulip.com/api/rest
@@ -16,15 +11,15 @@ Resources:
 Possible areas of improvement
   1. Save to calling directory, not project directory.
 """
-import json
 import os
 import sys
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
 import time
 import zulip
 from datetime import datetime
+
 
 # Vars
 PKG_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -35,6 +30,7 @@ CONFIG = {
     # 'outdir': PROJECT_DIR,
     # 'report1_filename': 'fhir-zulip-nlp - frequencies and date ranges.csv',
     # 'report2_filename': 'fhir-zulip-nlp - age and date analyses.csv',
+    # TODO: these types of files should have a '.' in front of them, so will change.
     'zuliprc_path': os.path.join(PROJECT_DIR, 'zuliprc'),  # rc = "runtime config"
     'chat_stream_name': 'terminology',
     'num_messages_per_query': 1000,
@@ -47,8 +43,22 @@ CONFIG = {
 # TODO: need to account for spelling variations
 # TODO: need to account for overlap. CDA is a subset of C-CDA, so need to prune results for these miscatches.
 KEYWORDS = {
-    'code_systems': ['DICOM', 'SNOMED', 'LOINC', 'ICD', 'NDC', 'RxNorm'],
-    'product_families': ['V2', 'Version 2', 'CDA', 'C-CDA', 'V3', 'Version 3'],
+    'code_systems': [
+        'DICOM',
+        'SNOMED',
+        'LOINC',
+        'ICD',
+        'NDC',
+        'RxNorm'
+    ],
+    'product_families': [
+        'V2',
+        'Version 2',
+        'CDA',
+        'C-CDA',
+        'V3',
+        'Version 3'
+    ],
     'terminology_resources': [
         'ConceptMap',
         'CodeSystem',
@@ -93,7 +103,9 @@ def message_pull(anchor: Union[int, str], num_before: int, num_after: int, keywo
     return result
 
 
-def query_keyword(keyword: str, anchor: int = 0, num_after: int = CONFIG['num_messages_per_query']):
+def query_keyword(
+    keyword: str, anchor: int = 0, num_after: int = CONFIG['num_messages_per_query']
+) -> (List[Dict], Optional[str]):
     """Fetch data from API
     anchor: Integer message ID to anchor fetching of new messages. Supports special string values too; to learn more,
       see: https://zulip.com/api/get-messages
@@ -112,36 +124,16 @@ def query_keyword(keyword: str, anchor: int = 0, num_after: int = CONFIG['num_me
                 print(f'No messages found for: {keyword}')
                 break
             anchor = messages[-1]['id']  # returned messages are in chronological order; -1 is most recent in batch
-            # if i == 3:  # TODO: temp debugging
-            #     break
             if res['found_newest']:  # this assumes API will reliably always return this
                 break
-
     # TODO: @Rohan: We may never need this, but the API could change and things could break. I'm not sure whether or not
     #  ...this is the best approach, continuing after error. Or maybe it should just exit? What do you think?
     except Exception as err:
         err_msg = str(err)
-        print(f'Got error querying {keyword}. Original error: {err}', file=sys.stderr)
+        print(f'Got error querying {keyword}. Original error: {err_msg}', file=sys.stderr)
         print(f'Stopping for "{keyword}" and continuing on with the next keyword.', file=sys.stderr)
 
-    # TODO: Check: If a message contains the keyword more than once, will it return more than 1 result? or
-    #  ...simply 1 message result?
-    kw_report = {
-        'keyword': keyword,
-        'number of occurrences': len(messages),
-        # This is oldest/newest of all such messages. However, depending on caching / what was passed to this function,
-        # the oldest in `allmess` may be newer than the absolute oldest, and newest in `allmess` may be older than the
-        # absolute oldest.
-        'newest_datetime_this_session': format_timestamp(messages[0]['timestamp']) if messages else None,
-        'oldest_datetime_this_session': format_timestamp(messages[-1]['timestamp']) if messages else None,
-        'newest_datetime_absolute':
-            format_timestamp(message_pull('newest', 1, 0, keyword)['messages'][0]['timestamp']) if messages else None,
-        'oldest_datetime_absolute':
-            format_timestamp(message_pull('oldest', 0, 1, keyword)['messages'][0]['timestamp']) if messages else None,
-    }
-    if err_msg:
-        kw_report['error'] = str(err_msg)
-    return kw_report, messages
+    return messages, err_msg
 
 
 def format_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -155,21 +147,54 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def query_categories(category_keywords: Dict[str, List[str]]) -> pd.DataFrame:
+def create_report1(
+    df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
+) -> (pd.DataFrame, pd.DataFrame):
+    """Report 1: counts and latest/oldest message timestamps"""
+    # No-results report
+    reports: List[Dict] = []
+    no_result_keywords: List[str] = []
+    for category, keywords in category_keywords.items():
+        for k in keywords:
+            df_kw = df[df['keyword'] == k]
+            df_kw = df_kw.sort_values(['timestamp'])  # oldest first
+            kw_report = {
+                'category': category,
+                'keyword': k,
+                # TODO: Check: If a message contains the keyword more than once, will it return more than 1 result? or
+                #  ...simply 1 message result? @Davera
+                'num_messages_with_keyword': len(df_kw),
+                'newest_message_datetime': format_timestamp(list(df_kw['timestamp'])[-1]) if len(df_kw) > 0 else None,
+                'oldest_message_datetime': format_timestamp(list(df_kw['timestamp'])[0]) if len(df_kw) > 0 else None,
+            }
+            if kw_report['num_messages_with_keyword'] == 0:
+                no_result_keywords.append(k)
+            reports.append(kw_report)
+
+    # Report 1
+    df_report1 = pd.DataFrame(reports)
+    df_report1 = format_df(df_report1)
+
+    # No results report
+    df_no_results = pd.DataFrame()
+    df_no_results['keywords_with_no_results'] = no_result_keywords
+
+    return df_report1, df_no_results
+
+
+def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
     cache_df = pd.DataFrame()
-    cache_json_path = CONFIG['cache_outpath'].replace('.csv', '.json')
-    cache_json = {cat: {k: [] for k in keywords} for cat, keywords in category_keywords.items()}
+    if not os.path.exists(CACHE_DIR):
+        os.mkdir(CACHE_DIR)
     if os.path.exists(CONFIG['cache_outpath']):
         cache_df = pd.read_csv(CONFIG['cache_outpath'])
 
     # Fetch data for all keywords for all categories
     last_msg_id = 0
-    reports: List[Dict] = []
-    messages: List[Dict] = []
+    new_messages: List[Dict] = []
     errors: List[Dict[str, str]] = []
-    no_result_keywords: List[str] = []
     for category, keywords in category_keywords.items():
         for k in keywords:
             # Get latest message ID from cache
@@ -177,58 +202,31 @@ def query_categories(category_keywords: Dict[str, List[str]]) -> pd.DataFrame:
                 kw_cache_df = cache_df[cache_df['keyword'] == k]
                 if len(kw_cache_df) > 0:
                     last_msg_id = list(kw_cache_df['id'])[-1]
-            # Get results
-            kw_report, kw_messages = query_keyword(keyword=k, anchor=last_msg_id)
-            # Massage
-            kw_report = {**kw_report, **{'category': category}}
+            # Raw messages
+            kw_messages, error = query_keyword(keyword=k, anchor=last_msg_id)
             kw_messages = [{**x, **{'category': category, 'keyword': k}} for x in kw_messages]
-            # Cache
-            cache_json[category][k] = kw_report
-            # Store results
-            reports.append(kw_report)
-            messages += kw_messages
-            if 'error' in kw_report:
-                errors.append({
-                    'keyword': k,
-                    'error_message': kw_report['error']})
-            if len(kw_report['number of occurrences']) == 0:
-                no_result_keywords.append(k)
+            new_messages += kw_messages
+            # Error report
+            errors += [{'keyword': k, 'error_message': error}] if error else []
 
     # Save outputs
-    # TODO: could probably put more of these lines into function as well, and rename it 'format and save'
+    # - raw messages
+    df_raw_new = pd.DataFrame(new_messages)
+    df_raw_new = format_df(df_raw_new)  # todo: this may not be necessary; remove?
+    df_raw = pd.concat([cache_df, df_raw_new])
+    df_raw = format_df(df_raw)
+    df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
+    df_raw.to_csv(CONFIG['cache_outpath'], index=False)
+    # - report 1: counts and latest/oldest message timestamps
+    df_report1, df_no_results = create_report1(df=df_raw, category_keywords=category_keywords)
+    df_report1.to_csv(CONFIG['outpath_report1'], index=False)
+    # - keywords w/ no results
+    if len(df_no_results) > 0:
+        df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
     # - errors
     if errors:
         df_errors = pd.DataFrame(errors)
         df_errors.to_csv(CONFIG['outpath_errors'], index=False)
-    # - keywords w/ no results
-    if no_result_keywords:
-        df_no_results = pd.DataFrame()
-        df_no_results['keywords_with_no_results'] = no_result_keywords
-        df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
-    # - report 1
-    df_report1 = pd.DataFrame(reports)
-    df_report1 = format_df(df_report1)
-    df_report1.to_csv(CONFIG['outpath_report1'], index=False)
-    # - raw messages
-    df_raw = pd.DataFrame(messages)
-    df_raw = format_df(df_raw)
-    df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
-
-    # Save cache
-    if not os.path.exists(CACHE_DIR):
-        os.mkdir(CACHE_DIR)
-    # - csv
-    cache_df_new = pd.concat([cache_df, df_raw])
-    cache_df_new = format_df(cache_df_new)
-    cache_df_new.to_csv(CONFIG['cache_outpath'], index=False)
-    # - json
-    cache_json_old = {}
-    if os.path.exists(cache_json_path):
-        with open(cache_json_path, 'r') as file:  # just in case useful
-            cache_json_old = json.loads(file.read())
-    cache_json_new = {**cache_json_old, **cache_json}
-    with open(cache_json_path, 'w') as file:  # just in case useful
-        json.dump(cache_json_new, file)
 
     return df_raw
 

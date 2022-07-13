@@ -15,3 +15,6 @@ Ad hoc NLP (Natural Language Processing) analysis of HL7 FHIR's online Zulip cha
 ## Results
 After running, analysis reports will be generated and saved in the repository directory as CSV files with the name 
 pattern `fhir-zulip-nlp*.csv`.
+
+Releases from previous runs have been uploaded on [GitHub](https://github.com/jhu-bids/fhir-zulip-nlp-analysis/releases)
+and [GoogleDrive](https://drive.google.com/drive/u/0/folders/16MFLnKoKA5gk4ELbSnVS2GCjgR_R0ETL).
