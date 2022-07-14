@@ -42,6 +42,7 @@ CONFIG = {
 }
 # TODO: need to account for spelling variations
 # TODO: need to account for overlap. CDA is a subset of C-CDA, so need to prune results for these miscatches.
+# Download new CSVs from: https://docs.google.com/spreadsheets/d/1J_PRWi2arsWQ9IJlg1iDfCeRIAzEWRYrBPTPVfqna3Y/edit#gid=1023607044
 KEYWORDS = {
     'code_systems': [
         'DICOM',
@@ -182,6 +183,14 @@ def create_report1(
     return df_report1, df_no_results
 
 
+# TODO: In order to account for the possibility that people could edit their prior messages, can add as a param to this
+#  ...function "account_for_edits"=True, or "cache"=False
+# TODO: Add "as_of" field with today's date at the time we ran this script.
+# TODO: spelling variations: v2 and V2 should be the same count, "Terminology Service" and
+#  "Terminology Svc", "$lookup" and "lookup operation(s)", etc.
+# TODO: keyword_variations: consider adding column to spreadsheet and using e.g. V2 variations would be "V2, Version 2"
+# TODO: how account for overlap? For example, CDA is different from C-CDA, but C-CDA counts probably include all
+#  ...instances of CDA.
 def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
