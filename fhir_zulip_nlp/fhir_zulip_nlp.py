@@ -145,7 +145,13 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     # Sort values
     df = df.sort_values(cols_head + ['timestamp'] if 'timestamp' in cols_tail else [])
     return df
-
+'''
+def time_format(seconds):
+    hours = seconds // 3600
+    minutes = seconds % 3600 // 60
+    secs = seconds % 3600 % 60
+    return '{:02d}:{:02d}:{:02d}'.format(hours, minutes, secs)
+'''
 
 def create_report1(
     df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
@@ -158,6 +164,8 @@ def create_report1(
         for k in keywords:
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
+            z = ((list(df_kw['timestamp'])[-1] - list(df_kw['timestamp'])[0])/86400)
+            threadlen= f'{z:.1f}'
             kw_report = {
                 'category': category,
                 'keyword': k,
@@ -166,6 +174,7 @@ def create_report1(
                 'num_messages_with_keyword': len(df_kw),
                 'newest_message_datetime': format_timestamp(list(df_kw['timestamp'])[-1]) if len(df_kw) > 0 else None,
                 'oldest_message_datetime': format_timestamp(list(df_kw['timestamp'])[0]) if len(df_kw) > 0 else None,
+                'thread_length': threadlen
             }
             if kw_report['num_messages_with_keyword'] == 0:
                 no_result_keywords.append(k)
