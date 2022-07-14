@@ -17,6 +17,8 @@ MANIFEST
 
 # Custom
 /*.csv
+!/category_keywords.csv
+!/HL7 Zulip NLP - category keywords.csv
 /*.json
 */cache/*
 !*/cache/.keep
