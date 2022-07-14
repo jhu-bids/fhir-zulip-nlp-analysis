@@ -226,8 +226,6 @@ def create_report2(
 # TODO: spelling variations: v2 and V2 should be the same count, "Terminology Service" and
 #  "Terminology Svc", "$lookup" and "lookup operation(s)", etc.
 # TODO: keyword_variations: consider adding column to spreadsheet and using e.g. V2 variations would be "V2, Version 2"
-# TODO: how account for overlap? For example, CDA is different from C-CDA, but C-CDA counts probably include all
-#  ...instances of CDA.
 def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
