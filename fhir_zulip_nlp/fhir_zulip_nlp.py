@@ -34,7 +34,8 @@ CONFIG = {
     'zuliprc_path': os.path.join(PROJECT_DIR, 'zuliprc'),  # rc = "runtime config"
     'chat_stream_name': 'terminology',
     'num_messages_per_query': 1000,
-    'outpath_report1': os.path.join(PROJECT_DIR, 'zulip_report1.csv'),
+    'outpath_report1': os.path.join(PROJECT_DIR, 'zulip_report1_counts.csv'),
+    'outpath_report2': os.path.join(PROJECT_DIR, 'zulip_report2_thread_lengths.csv'),
     'outpath_errors': os.path.join(PROJECT_DIR, 'zulip_errors.csv'),
     'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_keywords_with_no_results.csv'),
     'outpath_raw_results': os.path.join(PROJECT_DIR, RAW_RESULTS_FILENAME),
@@ -158,7 +159,6 @@ def create_report1(
     df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
 ) -> (pd.DataFrame, pd.DataFrame):
     """Report 1: counts and latest/oldest message timestamps"""
-    # No-results report
     reports: List[Dict] = []
     no_result_keywords: List[str] = []
     for category, keywords in category_keywords.items():
@@ -181,15 +181,43 @@ def create_report1(
                 no_result_keywords.append(k)
             reports.append(kw_report)
 
-    # Report 1
-    df_report1 = pd.DataFrame(reports)
-    df_report1 = format_df(df_report1)
+    # Report
+    df_report = pd.DataFrame(reports)
+    df_report = format_df(df_report)
 
     # No results report
     df_no_results = pd.DataFrame()
     df_no_results['keywords_with_no_results'] = no_result_keywords
 
-    return df_report1, df_no_results
+    return df_report, df_no_results
+
+
+def create_report2(
+    df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
+) -> (pd.DataFrame, pd.DataFrame):
+    """Report 2: thread lengths"""
+    reports: List[Dict] = []
+    for category, keywords in category_keywords.items():
+        for k in keywords:
+            df_kw = df[df['keyword'] == k]
+            df_kw = df_kw.sort_values(['timestamp'])  # oldest first
+            threads: List[str] = list(df_kw['subject'].unique())
+            for thread in threads:
+                df_thread = df_kw[df_kw['subject'] == thread]
+                z = ((list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0])/86400)
+                threadlen = f'{z:.1f}'
+                kw_report = {
+                    'category': category,
+                    'keyword': k,
+                    'thread': thread,
+                    'thread_length_days': threadlen
+                }
+                reports.append(kw_report)
+
+    df_report = pd.DataFrame(reports)
+    df_report = format_df(df_report)
+
+    return df_report
 
 
 # TODO: In order to account for the possibility that people could edit their prior messages, can add as a param to this
@@ -238,6 +266,9 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
     # - report 1: counts and latest/oldest message timestamps
     df_report1, df_no_results = create_report1(df=df_raw, category_keywords=category_keywords)
     df_report1.to_csv(CONFIG['outpath_report1'], index=False)
+    # - report 2: thread lengths
+    df_report2 = create_report2(df=df_raw, category_keywords=category_keywords)
+    df_report2.to_csv(CONFIG['outpath_report2'], index=False)
     # - keywords w/ no results
     if len(df_no_results) > 0:
         df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
