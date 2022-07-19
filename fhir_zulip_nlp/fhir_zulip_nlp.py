@@ -14,7 +14,7 @@ Possible areas of improvement
 import os
 import sys
 from typing import Dict, List, Optional, Union
-
+import math
 import pandas as pd
 import time
 import zulip
@@ -202,15 +202,38 @@ def create_report2(
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             threads: List[str] = list(df_kw['subject'].unique())
-            for thread in threads:
-                df_thread = df_kw[df_kw['subject'] == thread]
+            totthreadlen = 0
+            avgthread = ''
+            for thread in range(len(threads)):
+                df_thread = df_kw[df_kw['subject'] == threads[thread]]
                 z = ((list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0])/86400)
                 threadlen = f'{z:.1f}'
+                totthreadlen += float(threadlen)
+                if thread == len(threads)-1:
+                    avgthread = (round(totthreadlen/len(threads),3))
+            tot = 0
+            stddevthread = 0
+            for x in range(len(threads)):
+                df_thread1 = df_kw[df_kw['subject'] == threads[x]]
+                z1 = ((list(df_thread1['timestamp'])[-1] - list(df_thread1['timestamp'])[0])/86400)
+                tot += (float(z1)-float(avgthread))**2
+                stddevthread = math.sqrt(tot/len(threads))    
+                    
+            for thread in range(len(threads)):
+                outlier = False
+                df_thread = df_kw[df_kw['subject'] == threads[thread]]
+                z = ((list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0])/86400)
+                threadlen = f'{z:.1f}'
+                if z > stddevthread+avgthread or z< avgthread - stddevthread:
+                    outlier = True
+                
                 kw_report = {
                     'category': category,
                     'keyword': k,
                     'thread': thread,
-                    'thread_length_days': threadlen
+                    'thread_length_days': threadlen,
+                    'avg_thread_length': str(avgthread),
+                    'outlier' : str(outlier)
                 }
                 reports.append(kw_report)
 
