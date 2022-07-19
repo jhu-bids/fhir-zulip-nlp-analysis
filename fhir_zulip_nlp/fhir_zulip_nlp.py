@@ -162,7 +162,7 @@ def create_report1(
     reports: List[Dict] = []
     no_result_keywords: List[str] = []
     for category, keywords in category_keywords.items():
-        for k in keywords:
+        for k in keywords:                
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             z = ((list(df_kw['timestamp'])[-1] - list(df_kw['timestamp'])[0])/86400)
@@ -272,7 +272,14 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
             # Raw messages
             kw_messages, error = query_keyword(keyword=k, anchor=last_msg_id)
             kw_messages = [{**x, **{'category': category, 'keyword': k}} for x in kw_messages]
-            new_messages += kw_messages
+            new_list = []
+            for x in kw_messages:
+                if k == 'CDA' and 'C-CDA' in x['content']:
+                    continue
+                else:
+                    new_list.append(x)
+                        
+            new_messages += new_list
             # Error report
             errors += [{'keyword': k, 'error_message': error}] if error else []
 
