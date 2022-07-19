@@ -196,43 +196,42 @@ def create_report2(
     df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
 ) -> (pd.DataFrame, pd.DataFrame):
     """Report 2: thread lengths"""
+    seconds_per_day = 86400
     reports: List[Dict] = []
     for category, keywords in category_keywords.items():
         for k in keywords:
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             threads: List[str] = list(df_kw['subject'].unique())
-            totthreadlen = 0
-            avgthread = ''
+            # Average thread length
+            tot_thread_len = 0
             for thread in range(len(threads)):
                 df_thread = df_kw[df_kw['subject'] == threads[thread]]
-                z = ((list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0])/86400)
-                threadlen = f'{z:.1f}'
-                totthreadlen += float(threadlen)
-                if thread == len(threads)-1:
-                    avgthread = (round(totthreadlen/len(threads),3))
+                z = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
+                tot_thread_len += float(f'{z:.1f}')
+            avg_thread_len = round(tot_thread_len / len(threads), 3)
+            # Outliers
             tot = 0
             stddevthread = 0
             for x in range(len(threads)):
                 df_thread1 = df_kw[df_kw['subject'] == threads[x]]
-                z1 = ((list(df_thread1['timestamp'])[-1] - list(df_thread1['timestamp'])[0])/86400)
-                tot += (float(z1)-float(avgthread))**2
-                stddevthread = math.sqrt(tot/len(threads))    
-                    
+                z1 = (list(df_thread1['timestamp'])[-1] - list(df_thread1['timestamp'])[0]) / seconds_per_day
+                tot += (float(z1) - float(avg_thread_len)) ** 2
+                stddevthread = math.sqrt(tot/len(threads))
             for thread in range(len(threads)):
                 outlier = False
                 df_thread = df_kw[df_kw['subject'] == threads[thread]]
-                z = ((list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0])/86400)
+                z = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
                 threadlen = f'{z:.1f}'
-                if z > stddevthread+avgthread or z< avgthread - stddevthread:
+                if z > stddevthread+avg_thread_len or z< avg_thread_len - stddevthread:
                     outlier = True
-                
+                # Append report
                 kw_report = {
                     'category': category,
                     'keyword': k,
                     'thread': thread,
                     'thread_length_days': threadlen,
-                    'avg_thread_length': str(avgthread),
+                    'avg_thread_length': str(avg_thread_len),
                     'outlier' : str(outlier)
                 }
                 reports.append(kw_report)
