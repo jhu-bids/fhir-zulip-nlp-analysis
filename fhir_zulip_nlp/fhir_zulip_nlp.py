@@ -162,7 +162,7 @@ def create_report1(
     reports: List[Dict] = []
     no_result_keywords: List[str] = []
     for category, keywords in category_keywords.items():
-        for k in keywords:                
+        for k in keywords:
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             z = ((list(df_kw['timestamp'])[-1] - list(df_kw['timestamp'])[0])/86400)
@@ -273,9 +273,16 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
             kw_messages, error = query_keyword(keyword=k, anchor=last_msg_id)
             kw_messages = [{**x, **{'category': category, 'keyword': k}} for x in kw_messages]
             new_list = []
+            # Edge case handling
             for x in kw_messages:
+                # - Filter out: Handle case where the text of one keyword is fully contained within another keyword
+                # todo: minor: it is theoretically possible that a message could contain both (i) case where the text of
+                #  one keyword is fully contained within another keyword, as well as (ii) the actual keyword itself,
+                #  e.g. it might contain 'C-CDA' and also ' CDA ' or ' CDA,' or ' CDA.' or some other variation. However
+                #  this is really a minor edge case, and especilaly in the case of 'CDA' vs 'C-CDA', they are very
+                #  different things, so it is unlikely that they would both appear at the same time.
                 if k == 'CDA' and 'C-CDA' in x['content']:
-                    continue
+                    continue  # don't include
                 else:
                     new_list.append(x)
                         
