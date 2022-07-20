@@ -7,6 +7,7 @@ Resources:
     - Get all streams (probably not needed): https://zulip.com/api/get-streams
     - https://zulip.com/api/get-messages
   3. The Zulip chat we're querying: https://chat.fhir.org/#
+  4. Category keywords google sheet: https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/edit#gid=1136391153
 
 Possible areas of improvement
   1. Save to calling directory, not project directory.
@@ -44,6 +45,7 @@ CONFIG = {
 # TODO: need to account for spelling variations
 # TODO: need to account for overlap. CDA is a subset of C-CDA, so need to prune results for these miscatches.
 # Download new CSVs from: https://docs.google.com/spreadsheets/d/1J_PRWi2arsWQ9IJlg1iDfCeRIAzEWRYrBPTPVfqna3Y/edit#gid=1023607044
+# todo: $validate-code: there are actually 2 different operations w/ this same name. might need to disambiguate
 KEYWORDS = {
     'code_systems': [
         'DICOM',
@@ -244,6 +246,7 @@ def create_report2(
 
 # TODO: In order to account for the possibility that people could edit their prior messages, can add as a param to this
 #  ...function "account_for_edits"=True, or "cache"=False
+#  ...People like Peter Jordan are constantly editing their messages =P
 # TODO: Add "as_of" field with today's date at the time we ran this script.
 # TODO: spelling variations: v2 and V2 should be the same count, "Terminology Service" and
 #  "Terminology Svc", "$lookup" and "lookup operation(s)", etc.
