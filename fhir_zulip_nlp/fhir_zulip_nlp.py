@@ -274,7 +274,21 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
             # Raw messages
             kw_messages, error = query_keyword(keyword=k, anchor=last_msg_id)
             kw_messages = [{**x, **{'category': category, 'keyword': k}} for x in kw_messages]
-            new_messages += kw_messages
+            new_list = []
+            # Edge case handling
+            for x in kw_messages:
+                # - Filter out: Handle case where the text of one keyword is fully contained within another keyword
+                # todo: minor: it is theoretically possible that a message could contain both (i) case where the text of
+                #  one keyword is fully contained within another keyword, as well as (ii) the actual keyword itself,
+                #  e.g. it might contain 'C-CDA' and also ' CDA ' or ' CDA,' or ' CDA.' or some other variation. However
+                #  this is really a minor edge case, and especilaly in the case of 'CDA' vs 'C-CDA', they are very
+                #  different things, so it is unlikely that they would both appear at the same time.
+                if k == 'CDA' and 'C-CDA' in x['content']:
+                    continue  # don't include
+                else:
+                    new_list.append(x)
+                        
+            new_messages += new_list
             # Error report
             errors += [{'keyword': k, 'error_message': error}] if error else []
 
