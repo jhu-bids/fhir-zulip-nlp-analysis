@@ -7,7 +7,8 @@ Resources:
     - Get all streams (probably not needed): https://zulip.com/api/get-streams
     - https://zulip.com/api/get-messages
   3. The Zulip chat we're querying: https://chat.fhir.org/#
-  4. Category keywords google sheet: https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/edit#gid=1136391153
+  4. Category keywords google sheet:
+     https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/edit#gid=1136391153
 
 Possible areas of improvement
   1. Save to calling directory, not project directory.
@@ -44,7 +45,8 @@ CONFIG = {
 }
 # TODO: need to account for spelling variations
 # TODO: need to account for overlap. CDA is a subset of C-CDA, so need to prune results for these miscatches.
-# Download new CSVs from: https://docs.google.com/spreadsheets/d/1J_PRWi2arsWQ9IJlg1iDfCeRIAzEWRYrBPTPVfqna3Y/edit#gid=1023607044
+# Download new CSVs from:
+#   https://docs.google.com/spreadsheets/d/1J_PRWi2arsWQ9IJlg1iDfCeRIAzEWRYrBPTPVfqna3Y/edit#gid=1023607044
 # todo: $validate-code: there are actually 2 different operations w/ this same name. might need to disambiguate
 KEYWORDS = {
     'code_systems': [
@@ -149,6 +151,8 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     # Sort values
     df = df.sort_values(cols_head + ['timestamp'] if 'timestamp' in cols_tail else [])
     return df
+
+
 '''
 def time_format(seconds):
     hours = seconds // 3600
@@ -156,6 +160,7 @@ def time_format(seconds):
     secs = seconds % 3600 % 60
     return '{:02d}:{:02d}:{:02d}'.format(hours, minutes, secs)
 '''
+
 
 def create_report1(
     df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
@@ -168,7 +173,7 @@ def create_report1(
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             z = ((list(df_kw['timestamp'])[-1] - list(df_kw['timestamp'])[0])/86400)
-            threadlen= f'{z:.1f}'
+            threadlen = f'{z:.1f}'
             kw_report = {
                 'category': category,
                 'keyword': k,
@@ -191,6 +196,11 @@ def create_report1(
     df_no_results = pd.DataFrame()
     df_no_results['keywords_with_no_results'] = no_result_keywords
 
+    # Save & return
+    df_report.to_csv(CONFIG['outpath_report1'], index=False)
+    if len(df_no_results) > 0:
+        df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
+
     return df_report, df_no_results
 
 
@@ -206,40 +216,59 @@ def create_report2(
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             threads: List[str] = list(df_kw['subject'].unique())
             # Average thread length
+            # TODO: Refactor to pandas?
             tot_thread_len = 0
-            for thread in range(len(threads)):
-                df_thread = df_kw[df_kw['subject'] == threads[thread]]
-                z = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
-                tot_thread_len += float(f'{z:.1f}')
-            avg_thread_len = round(tot_thread_len / len(threads), 3)
+            thread_data: Dict[str, pd.DataFrame] = {}
+            for thread in threads:
+                df_thread = df_kw[df_kw['subject'] == thread]
+                # TODO: Want to double check that timestamps are still/indeed sorted properly (i) here, and
+                #  (ii) everywhere else where we're doing timestamps like this
+                # TODO: better: rather than get the first and the last, timestamp. should be able to get max() and min()
+                thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
+                tot_thread_len += float(f'{thread_len:.1f}')
+                thread_data[thread] = df_thread
+            avg_len_kw_thread = round(tot_thread_len / len(threads), 3)
             # Outliers
-            tot = 0
-            stddevthread = 0
-            for x in range(len(threads)):
-                df_thread1 = df_kw[df_kw['subject'] == threads[x]]
-                z1 = (list(df_thread1['timestamp'])[-1] - list(df_thread1['timestamp'])[0]) / seconds_per_day
-                tot += (float(z1) - float(avg_thread_len)) ** 2
-                stddevthread = math.sqrt(tot/len(threads))
-            for thread in range(len(threads)):
+            # TODO: Refactor to pandas to reduce lines and improve performance?
+            # TODO: Add cols for 1 and 2 std deviations?
+            # TODO: Might need to make 3 columns for these outliers: std deviations away from (i) keyword avg,
+            #  (ii) category avg, (iii) avg of all of our queried category/keyword threads.
+            # Calc std deviation
+            sum_square_distance = 0
+            for thread in threads:
+                df_thread = thread_data[thread]
+                thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
+                sum_square_distance += (float(thread_len) - float(avg_len_kw_thread)) ** 2
+            stddev_kw_threads = math.sqrt(sum_square_distance / len(threads))
+            # Calc how many std deviations away per thread
+            for thread in threads:
                 outlier = False
-                df_thread = df_kw[df_kw['subject'] == threads[thread]]
-                z = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
-                threadlen = f'{z:.1f}'
-                if z > stddevthread+avg_thread_len or z< avg_thread_len - stddevthread:
+                df_thread = thread_data[thread]
+                thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
+                if thread_len > stddev_kw_threads + avg_len_kw_thread or \
+                    thread_len < avg_len_kw_thread - stddev_kw_threads:
                     outlier = True
-                # Append report
+                # Calc URL
+                t = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
+                url = 'https://chat.fhir.org/#narrow/' + f'{t["type"]}/{t["stream_id"]}-{t["display_recipient"]}' + \
+                      f'/topic/{t["subject"]}'
+                # Append to report
                 kw_report = {
                     'category': category,
                     'keyword': k,
-                    'thread': thread,
-                    'thread_length_days': threadlen,
-                    'avg_thread_length': str(avg_thread_len),
-                    'outlier' : str(outlier)
+                    'kw_avg_thread_len': str(avg_len_kw_thread),
+                    'thread_name': thread,
+                    'thread_length_days': f'{thread_len:.1f}',
+                    'thread_stddev_from_kw_avg_thread_len': '1+' if outlier else '0',
+                    'thread_url': url,
                 }
                 reports.append(kw_report)
 
     df_report = pd.DataFrame(reports)
     df_report = format_df(df_report)
+
+    # Save & return
+    df_report.to_csv(CONFIG['outpath_report2'], index=False)
 
     return df_report
 
@@ -281,7 +310,7 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
                 # todo: minor: it is theoretically possible that a message could contain both (i) case where the text of
                 #  one keyword is fully contained within another keyword, as well as (ii) the actual keyword itself,
                 #  e.g. it might contain 'C-CDA' and also ' CDA ' or ' CDA,' or ' CDA.' or some other variation. However
-                #  this is really a minor edge case, and especilaly in the case of 'CDA' vs 'C-CDA', they are very
+                #  this is really a minor edge case, and especially in the case of 'CDA' vs 'C-CDA', they are very
                 #  different things, so it is unlikely that they would both appear at the same time.
                 if k == 'CDA' and 'C-CDA' in x['content']:
                     continue  # don't include
@@ -300,15 +329,10 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
     df_raw = format_df(df_raw)
     df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
     df_raw.to_csv(CONFIG['cache_outpath'], index=False)
-    # - report 1: counts and latest/oldest message timestamps
-    df_report1, df_no_results = create_report1(df=df_raw, category_keywords=category_keywords)
-    df_report1.to_csv(CONFIG['outpath_report1'], index=False)
+    # - report 1: counts and latest/oldest message timestamps && keywords w/ no results
+    create_report1(df=df_raw, category_keywords=category_keywords)
     # - report 2: thread lengths
-    df_report2 = create_report2(df=df_raw, category_keywords=category_keywords)
-    df_report2.to_csv(CONFIG['outpath_report2'], index=False)
-    # - keywords w/ no results
-    if len(df_no_results) > 0:
-        df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
+    create_report2(df=df_raw, category_keywords=category_keywords)
     # - errors
     if errors:
         df_errors = pd.DataFrame(errors)
