@@ -183,7 +183,7 @@ def create_report1(
                 'num_messages_with_keyword': len(df_kw),
                 'newest_message_datetime': format_timestamp(list(df_kw['timestamp'])[-1]) if len(df_kw) > 0 else None,
                 'oldest_message_datetime': format_timestamp(list(df_kw['timestamp'])[0]) if len(df_kw) > 0 else None,
-                'thread_length': threadlen,
+                'days_between_first_and_last_mention': threadlen,
                 'query_date': today
             }
             if kw_report['num_messages_with_keyword'] == 0:
