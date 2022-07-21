@@ -20,7 +20,7 @@ import math
 import pandas as pd
 import time
 import zulip
-from datetime import datetime
+from datetime import datetime,date
 
 
 # Vars
@@ -168,6 +168,7 @@ def create_report1(
     """Report 1: counts and latest/oldest message timestamps"""
     reports: List[Dict] = []
     no_result_keywords: List[str] = []
+    today = date.today()
     for category, keywords in category_keywords.items():
         for k in keywords:
             df_kw = df[df['keyword'] == k]
@@ -182,7 +183,8 @@ def create_report1(
                 'num_messages_with_keyword': len(df_kw),
                 'newest_message_datetime': format_timestamp(list(df_kw['timestamp'])[-1]) if len(df_kw) > 0 else None,
                 'oldest_message_datetime': format_timestamp(list(df_kw['timestamp'])[0]) if len(df_kw) > 0 else None,
-                'thread_length': threadlen
+                'thread_length': threadlen,
+                'query_date': today
             }
             if kw_report['num_messages_with_keyword'] == 0:
                 no_result_keywords.append(k)
@@ -210,6 +212,7 @@ def create_report2(
     """Report 2: thread lengths"""
     seconds_per_day = 86400
     reports: List[Dict] = []
+    today = date.today()
     for category, keywords in category_keywords.items():
         for k in keywords:
             df_kw = df[df['keyword'] == k]
@@ -261,6 +264,7 @@ def create_report2(
                     'thread_length_days': f'{thread_len:.1f}',
                     'thread_stddev_from_kw_avg_thread_len': '1+' if outlier else '0',
                     'thread_url': url,
+                    'query_date': today
                 }
                 reports.append(kw_report)
 
