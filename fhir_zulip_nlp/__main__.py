@@ -1,5 +1,8 @@
 """FHIR Zulip NLP Analysis"""
-from fhir_zulip_nlp.fhir_zulip_nlp import run, CONFIG
+try:
+	from fhir_zulip_nlp.fhir_zulip_nlp import run
+except ModuleNotFoundError:
+	from fhir_zulip_nlp import run
 
 
-run(**CONFIG)
+run()

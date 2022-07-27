@@ -13,27 +13,30 @@ Resources:
 Possible areas of improvement
   1. Save to calling directory, not project directory.
 """
+import math
 import os
 import sys
-from typing import Dict, List, Optional, Union
-import math
-import pandas as pd
 import time
+from datetime import datetime, date
+from typing import Dict, List, Optional, Union
+
 import zulip
-from datetime import datetime,date
+import pandas as pd
+
+try:
+    from fhir_zulip_nlp.google_sheets import get_sheets_data
+except ModuleNotFoundError:
+    from google_sheets import get_sheets_data
 
 
 # Vars
 PKG_DIR = os.path.dirname(os.path.realpath(__file__))
 PROJECT_DIR = os.path.join(PKG_DIR, '..')
+ENV_DIR = os.path.join(PROJECT_DIR, 'env')
 CACHE_DIR = os.path.join(PKG_DIR, 'cache')
 RAW_RESULTS_FILENAME = 'zulip_raw_results.csv'
 CONFIG = {
-    # 'outdir': PROJECT_DIR,
-    # 'report1_filename': 'fhir-zulip-nlp - frequencies and date ranges.csv',
-    # 'report2_filename': 'fhir-zulip-nlp - age and date analyses.csv',
-    # TODO: these types of files should have a '.' in front of them, so will change.
-    'zuliprc_path': os.path.join(PROJECT_DIR, 'zuliprc'),  # rc = "runtime config"
+    'zuliprc_path': os.path.join(ENV_DIR, '.zuliprc'),  # rc = "runtime config"
     'chat_stream_name': 'terminology',
     'num_messages_per_query': 1000,
     'outpath_report1': os.path.join(PROJECT_DIR, 'zulip_report1_counts.csv'),
@@ -41,51 +44,8 @@ CONFIG = {
     'outpath_errors': os.path.join(PROJECT_DIR, 'zulip_errors.csv'),
     'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_keywords_with_no_results.csv'),
     'outpath_raw_results': os.path.join(PROJECT_DIR, RAW_RESULTS_FILENAME),
-    'cache_outpath': os.path.join(CACHE_DIR, RAW_RESULTS_FILENAME),
-}
-# TODO: need to account for spelling variations
-# TODO: need to account for overlap. CDA is a subset of C-CDA, so need to prune results for these miscatches.
-# Download new CSVs from:
-#   https://docs.google.com/spreadsheets/d/1J_PRWi2arsWQ9IJlg1iDfCeRIAzEWRYrBPTPVfqna3Y/edit#gid=1023607044
-# todo: $validate-code: there are actually 2 different operations w/ this same name. might need to disambiguate
-KEYWORDS = {
-    'code_systems': [
-        'DICOM',
-        'SNOMED',
-        'LOINC',
-        'ICD',
-        'NDC',
-        'RxNorm'
-    ],
-    'product_families': [
-        'V2',
-        'Version 2',
-        'CDA',
-        'C-CDA',
-        'V3',
-        'Version 3'
-    ],
-    'terminology_resources': [
-        'ConceptMap',
-        'CodeSystem',
-        'ValueSet',
-        'Terminology Service',
-        'TerminologyCapabilities',
-        'NamingSystem',
-        'Code',
-        'Coding',
-        'CodeableConcept',
-    ],
-    'terminology_operations': [
-        '$lookup',
-        '$validate-code',
-        '$subsumes',
-        '$find-matches',
-        '$expand',
-        '$validate-code',
-        '$translate',
-        '$closure',
-    ],
+    'results_cache_path': os.path.join(CACHE_DIR, RAW_RESULTS_FILENAME),
+    'keywords_cache_path': os.path.join(CACHE_DIR, 'keywords.csv'),
 }
 CLIENT = zulip.Client(config_file=CONFIG['zuliprc_path'])
 
@@ -163,7 +123,7 @@ def time_format(seconds):
 
 
 def create_report1(
-    df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
+    df: pd.DataFrame, category_keywords: Dict[str, List[str]]
 ) -> (pd.DataFrame, pd.DataFrame):
     """Report 1: counts and latest/oldest message timestamps"""
     reports: List[Dict] = []
@@ -207,7 +167,7 @@ def create_report1(
 
 
 def create_report2(
-    df: pd.DataFrame, category_keywords: Dict[str, List[str]] = KEYWORDS
+    df: pd.DataFrame, category_keywords: Dict[str, List[str]]
 ) -> (pd.DataFrame, pd.DataFrame):
     """Report 2: thread lengths"""
     seconds_per_day = 86400
@@ -248,8 +208,7 @@ def create_report2(
                 outlier = False
                 df_thread = thread_data[thread]
                 thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
-                if thread_len > stddev_kw_threads + avg_len_kw_thread or \
-                    thread_len < avg_len_kw_thread - stddev_kw_threads:
+                if thread_len > stddev_kw_threads + avg_len_kw_thread or thread_len < avg_len_kw_thread - stddev_kw_threads:
                     outlier = True
                 # Calc URL
                 t = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
@@ -284,14 +243,14 @@ def create_report2(
 # TODO: spelling variations: v2 and V2 should be the same count, "Terminology Service" and
 #  "Terminology Svc", "$lookup" and "lookup operation(s)", etc.
 # TODO: keyword_variations: consider adding column to spreadsheet and using e.g. V2 variations would be "V2, Version 2"
-def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.DataFrame:
+def query_categories(category_keywords: Dict[str, List[str]]) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
     cache_df = pd.DataFrame()
     if not os.path.exists(CACHE_DIR):
         os.mkdir(CACHE_DIR)
-    if os.path.exists(CONFIG['cache_outpath']):
-        cache_df = pd.read_csv(CONFIG['cache_outpath'])
+    if os.path.exists(CONFIG['results_cache_path']):
+        cache_df = pd.read_csv(CONFIG['results_cache_path'])
 
     # Fetch data for all keywords for all categories
     last_msg_id = 0
@@ -332,7 +291,7 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
     df_raw = pd.concat([cache_df, df_raw_new])
     df_raw = format_df(df_raw)
     df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
-    df_raw.to_csv(CONFIG['cache_outpath'], index=False)
+    df_raw.to_csv(CONFIG['results_cache_path'], index=False)
     # - report 1: counts and latest/oldest message timestamps && keywords w/ no results
     create_report1(df=df_raw, category_keywords=category_keywords)
     # - report 2: thread lengths
@@ -345,6 +304,41 @@ def query_categories(category_keywords: Dict[str, List[str]] = KEYWORDS) -> pd.D
     return df_raw
 
 
+# TODO: need to account for spelling variations w/in a new colum in the google sheet
+# todo: $validate-code: there are actually 2 different operations w/ this same name. might need to disambiguate
+def _get_keywords(
+    sheet_name='category_keywords', cache_path=CONFIG['keywords_cache_path'], use_cache_only=False
+) -> Dict[str, List[str]]:
+    """Get keywords from google sheets, else cache
+    sheet_name: The name of the specific sheet within a GoogleSheet workbook."""
+    # Load
+    if use_cache_only:
+        df: pd.DataFrame = pd.read_csv(cache_path)
+    else:
+        try:
+            # todo: Pass URI too
+            df: pd.DataFrame = get_sheets_data(sheet_name=sheet_name, env_dir=ENV_DIR)
+            df.to_csv(cache_path, index=False)
+        except:
+            df: pd.DataFrame = pd.read_csv(cache_path)
+
+    # Convert to dictionary
+    category_keywords: Dict[str, List[str]] = {}
+    categories = list(df['category'].unique())
+    for c in categories:
+        df_i = df[df['category'] == c]
+        keywords = list(df_i['keyword'])
+        category_keywords[c] = keywords
+
+    return category_keywords
+
+
+def run():
+    """Run program"""
+    keywords = _get_keywords()
+    return query_categories(keywords)
+
+
 # Execution
 if __name__ == '__main__':
-    all_results = query_categories(KEYWORDS)
+    all_results = run()
