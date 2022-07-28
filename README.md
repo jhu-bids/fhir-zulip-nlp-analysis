@@ -1,6 +1,9 @@
 # HL7 FHIR Zulip chat NLP analysis
 Ad hoc NLP (Natural Language Processing) analysis of HL7 FHIR's online Zulip chat streams.
 
+## Category keywords
+The program reads directly [from this Google Sheet](https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/).
+
 ## Setting up and running
 0. Prerequisites: Python3
 1. Clone this repository.
