@@ -25,7 +25,7 @@ import pandas as pd
 
 try:
     from fhir_zulip_nlp.google_sheets import get_sheets_data
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     from google_sheets import get_sheets_data
 
 
