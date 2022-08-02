@@ -173,8 +173,17 @@ def create_report2(
     seconds_per_day = 86400
     reports: List[Dict] = []
     today = date.today()
-    for category, keywords in category_keywords.items():
-        for k in keywords:
+    tot_all = 0
+    std_all = 0
+    num_all_threads = 0
+    for j, (category, keywords) in enumerate(category_keywords.items()):
+        tot_category = 0
+        var_category = 0
+        avg_category = 0
+        std_category = 0
+        num_threads = 0
+
+        for k in (keywords):
             df_kw = df[df['keyword'] == k]
             df_kw = df_kw.sort_values(['timestamp'])  # oldest first
             threads: List[str] = list(df_kw['subject'].unique())
@@ -184,12 +193,15 @@ def create_report2(
             thread_data: Dict[str, pd.DataFrame] = {}
             for thread in threads:
                 df_thread = df_kw[df_kw['subject'] == thread]
+                num_threads += 1
                 # TODO: Want to double check that timestamps are still/indeed sorted properly (i) here, and
                 #  (ii) everywhere else where we're doing timestamps like this
                 # TODO: better: rather than get the first and the last, timestamp. should be able to get max() and min()
                 thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
                 tot_thread_len += float(f'{thread_len:.1f}')
                 thread_data[thread] = df_thread
+                num_all_threads += 1
+                tot_all += thread_len
             avg_len_kw_thread = round(tot_thread_len / len(threads), 3)
             # Outliers
             # TODO: Refactor to pandas to reduce lines and improve performance?
@@ -204,35 +216,53 @@ def create_report2(
                 sum_square_distance += (float(thread_len) - float(avg_len_kw_thread)) ** 2
             stddev_kw_threads = math.sqrt(sum_square_distance / len(threads))
             # Calc how many std deviations away per thread
-            for thread in threads:
+            tot_category += tot_thread_len
+            var_category += (stddev_kw_threads) ** 2
+            std_all += stddev_kw_threads ** 2
+            for i, thread in enumerate(threads):
                 outlier = False
                 df_thread = thread_data[thread]
                 thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
+                std_away = 0
                 if thread_len > stddev_kw_threads + avg_len_kw_thread or thread_len < avg_len_kw_thread - stddev_kw_threads:
                     outlier = True
+                    std_away = abs(thread_len - avg_len_kw_thread) / stddev_kw_threads
                 # Calc URL
                 t = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
                 url = 'https://chat.fhir.org/#narrow/' + f'{t["type"]}/{t["stream_id"]}-{t["display_recipient"]}' + \
                       f'/topic/{t["subject"]}'
                 # Append to report
+                if i == len(threads) - 1:
+                    avg_category = round(tot_category / num_threads, 2)
+                    std_category = round(math.sqrt(var_category / num_threads), 2)
+                    num_threads = 0
+                    tot_category = 0
+                    var_category = 0
+                elif i == len(threads) - 1 and j == len(list(category)) - 1:
+                    avg_total = round((tot_all / num_all_threads), 2)
+                    std_tot = round(math.sqrt(std_all / num_all_threads), 2)
                 kw_report = {
                     'category': category,
                     'keyword': k,
                     'kw_avg_thread_len': str(avg_len_kw_thread),
                     'thread_name': thread,
                     'thread_length_days': f'{thread_len:.1f}',
-                    'thread_stddev_from_kw_avg_thread_len': '1+' if outlier else '0',
+                    'thread_stddev_from_kw_avg_thread_len': str(round(std_away, 2)),
+                    'outlier?': str(outlier),
+                    'avg_total': avg_total,
+                    'std_total': std_tot,
+                    'avg_category': (avg_category),
+                    'std_category': (std_category),
                     'thread_url': url,
                     'query_date': today
                 }
+                avg_category = 0
+                std_category = 0
                 reports.append(kw_report)
-
     df_report = pd.DataFrame(reports)
     df_report = format_df(df_report)
-
     # Save & return
     df_report.to_csv(CONFIG['outpath_report2'], index=False)
-
     return df_report
 
 
