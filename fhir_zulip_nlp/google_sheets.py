@@ -81,9 +81,21 @@ def get_sheets_data(sheet_name, env_dir) -> pd.DataFrame:
     """Get data from a google sheet."""
     result: Dict = _get_sheets_live(sheet_name, env_dir)
 
-    rows: List[List[str]] = result.get('values', [])
-    df = pd.DataFrame(rows[1:]).fillna('')
-    df.columns = rows[0]
+    jagged_rows: List[List[str]] = result.get('values', [])
+    columns = jagged_rows[0]  # will always be correct len unless one of the rows has values out of bounds of any column
+    n_cols = len(columns)
+
+    # Fix jaggedness: Missing vals simply don't appear in list, creating jagged list of lists
+    rows = []
+    for row in jagged_rows[1:]:
+        n_missing_cells = n_cols - len(row)
+        if n_missing_cells:
+            row = row + [''] * n_missing_cells
+        rows.append(row)
+
+    # Create dataframe
+    df = pd.DataFrame(rows).fillna('')
+    df.columns = columns
 
     return df
 
