@@ -97,6 +97,9 @@ def get_sheets_data(sheet_name, env_dir) -> pd.DataFrame:
     df = pd.DataFrame(rows).fillna('')
     df.columns = columns
 
+    # Massage
+    df = df.apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
+
     return df
 
 

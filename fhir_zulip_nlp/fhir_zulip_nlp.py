@@ -63,6 +63,11 @@ def format_timestamp(timestamp: int):
     return datetime.utcfromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _get_list_from_delimited_cell_string(s, delimiter=INTRA_CELL_DELIMITER):
+    """From a single dataframe cell that contains a delmiter, convert that string to a list."""
+    return [x.strip() for x in s.split(delimiter)]
+
+
 def _load_cached_messages(msg_cache_path=CONFIG['results_cache_path']):
     """Load cached messages"""
     cache_df = pd.DataFrame()
@@ -95,6 +100,10 @@ def _load_keywords_df(
                   f'\n- Last modified: {last_modified}'
                   f'\n- Error: {str(err)}', file=sys.stderr)
             df: pd.DataFrame = pd.read_csv(cache_path).fillna('')
+
+    # Massage
+    df = df.apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
+
     return df
 
 
@@ -417,7 +426,7 @@ def _get_keywords(use_cached_keyword_inputs=False) -> TYPE_KEYWORDS_DICT:
         for _index, row in df_i.iterrows():
             kw = row['keyword']
             spellings_str: str = row['spelling_variations']
-            spellings_list: List[str] = spellings_str.split(INTRA_CELL_DELIMITER) if spellings_str else [kw]
+            spellings_list: List[str] = _get_list_from_delimited_cell_string(spellings_str) if spellings_str else [kw]
             category_keywords[c][kw] = spellings_list
 
     return category_keywords
@@ -432,7 +441,7 @@ def _get_keyword_contexts(use_cached_keyword_inputs=False) -> Dict[str, List[str
     for _index, row in df.iterrows():
         kw = row['keyword']
         context_str: str = row['context']
-        context_list: List[str] = context_str.split(INTRA_CELL_DELIMITER) if context_str else []
+        context_list: List[str] = _get_list_from_delimited_cell_string(context_str) if context_str else []
         if context_list:
             keyword_contexts[kw] = context_list
 
