@@ -21,6 +21,7 @@ import math
 import os
 import sys
 import time
+from argparse import ArgumentParser
 from datetime import datetime, date
 from typing import Dict, List, Optional, Union
 
@@ -60,6 +61,41 @@ CLIENT = zulip.Client(config_file=CONFIG['zuliprc_path'])
 def format_timestamp(timestamp: int):
     """Format datetime string"""
     return datetime.utcfromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _load_cached_messages(msg_cache_path=CONFIG['results_cache_path']):
+    """Load cached messages"""
+    cache_df = pd.DataFrame()
+    if not os.path.exists(CACHE_DIR):
+        os.mkdir(CACHE_DIR)
+    if os.path.exists(msg_cache_path):
+        cache_df = pd.read_csv(msg_cache_path)
+    return cache_df
+
+
+def _load_keywords_df(
+    sheet_name='category_keywords', cache_path=CONFIG['keywords_cache_path'], use_cache_only=False
+) -> pd.DataFrame:
+    """Get keywords data from google sheets, else cache
+        sheet_name: The name of the specific sheet within a GoogleSheet workbook."""
+    if use_cache_only:
+        df: pd.DataFrame = pd.read_csv(cache_path).fillna('')
+    else:
+        # PyBroadException: Broad because (a) don't now what failure returns now nor (b) might return in future, and
+        # ...(c) basic usability is more improtant right now. The warning should be sufficient.
+        # noinspection PyBroadException
+        try:
+            # todo: Pass URI too
+            df: pd.DataFrame = get_sheets_data(sheet_name=sheet_name, env_dir=ENV_DIR)
+            df.to_csv(cache_path, index=False)
+        except BaseException as err:
+            last_modified = str(datetime.utcfromtimestamp(os.path.getmtime(cache_path)))
+            print(f'Warning: Reading from GoogleSheets failed. Using cache: '
+                  f'\n- File name: {os.path.basename(cache_path)}'
+                  f'\n- Last modified: {last_modified}'
+                  f'\n- Error: {str(err)}', file=sys.stderr)
+            df: pd.DataFrame = pd.read_csv(cache_path).fillna('')
+    return df
 
 
 def message_pull(anchor: Union[int, str], num_before: int, num_after: int, keyword: str) -> Dict:
@@ -119,7 +155,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def handle_keyword_edge_cases(keyword: str, messages: List[Dict]):
+def _handle_keyword_edge_cases(keyword: str, messages: List[Dict]):
     """Filter out / etc special edge cases in API responses"""
     new_list = []
     for x in messages:
@@ -137,32 +173,62 @@ def handle_keyword_edge_cases(keyword: str, messages: List[Dict]):
     return new_list
 
 
-def create_report1(df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT) -> (pd.DataFrame, pd.DataFrame):
+# todo: this would be a good place to use `nltk`
+def _get_messages_with_context(df: pd.DataFrame, context: str) -> pd.DataFrame:
+    """Given a Zulip message dataframe, get all messages w/ subject or body containing context"""
+    if not context:
+        return df
+    df2 = df[(df['content'].str.contains(context)) | (df['subject'].str.contains(context))]
+    return df2
+
+
+def _get_counts_from_kw_messages(
+    df: pd.DataFrame, category: str, keyword: str, spelling: str, today: str, context: str = ''
+) -> Dict:
+    """Get counts from keyword messages"""
+    # Get context info
+    if context:
+        df = _get_messages_with_context(df, context)
+    # Calculate thread length
+    df = df.sort_values(['timestamp'])  # oldest first
+    z = ((list(df['timestamp'])[-1] - list(df['timestamp'])[0]) / 86400)
+    threadlen = f'{z:.1f}'
+    # Create report
+    kw_report = {
+        'category': category,
+        'keyword': keyword,
+        'keyword_spelling': spelling,
+        'context': context,
+        # TODO: #1
+        'num_messages_with_kw_spelling': len(df),
+        'newest_message_datetime': format_timestamp(list(df['timestamp'])[-1]) if len(df) > 0 else None,
+        'oldest_message_datetime': format_timestamp(list(df['timestamp'])[0]) if len(df) > 0 else None,
+        'days_between_first_and_last_mention': threadlen,
+        'query_date': today
+    }
+    return kw_report
+
+
+def create_report1(
+    df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]]
+) -> (pd.DataFrame, pd.DataFrame):
     """Report 1: counts and latest/oldest message timestamps"""
     reports: List[Dict] = []
     no_result_keywords: List[str] = []
-    today = date.today()
-    for category, keywords in category_keywords.items():
+    today = str(date.today())
+    for c, keywords in category_keywords.items():
         for k, spellings in keywords.items():
+            contexts = kw_contexts.get(k, [])
+            # add null context: needed to capture messages where no context words appear
+            contexts = contexts + [''] if '' not in contexts else contexts
             for s in spellings:
                 df_i = df[df['keyword_spelling'] == s]
-                df_i = df_i.sort_values(['timestamp'])  # oldest first
-                z = ((list(df_i['timestamp'])[-1] - list(df_i['timestamp'])[0])/86400)
-                threadlen = f'{z:.1f}'
-                kw_report = {
-                    'category': category,
-                    'keyword': k,
-                    'keyword_spelling': s,
-                    # TODO: #1
-                    'num_messages_with_kw_spelling': len(df_i),
-                    'newest_message_datetime': format_timestamp(list(df_i['timestamp'])[-1]) if len(df_i) > 0 else None,
-                    'oldest_message_datetime': format_timestamp(list(df_i['timestamp'])[0]) if len(df_i) > 0 else None,
-                    'days_between_first_and_last_mention': threadlen,
-                    'query_date': today
-                }
-                if kw_report['num_messages_with_kw_spelling'] == 0:
-                    no_result_keywords.append(k)
-                reports.append(kw_report)
+                for context in contexts:
+                    kw_report: Dict = _get_counts_from_kw_messages(
+                        df=df_i, category=c, keyword=k, spelling=s, today=today, context=context)
+                    if kw_report['num_messages_with_kw_spelling'] == 0:
+                        no_result_keywords.append(k)
+                    reports.append(kw_report)
 
     # Report
     df_report = pd.DataFrame(reports)
@@ -180,67 +246,80 @@ def create_report1(df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT) -> (
     return df_report, df_no_results
 
 
-def create_report2(df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT) -> (pd.DataFrame, pd.DataFrame):
+def create_report2(
+    df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]]
+) -> (pd.DataFrame, pd.DataFrame):
     """Report 2: thread lengths"""
     seconds_per_day = 86400
     reports: List[Dict] = []
     today = date.today()
     for category, keywords in category_keywords.items():
         for k, spellings in keywords.items():
+            contexts = kw_contexts.get(k, [])
+            # add null context: needed to capture messages where no context words appear
+            contexts = contexts + [''] if '' not in contexts else contexts
             for s in spellings:
                 df_i = df[df['keyword_spelling'] == s]
-                df_i = df_i.sort_values(['timestamp'])  # oldest first
-                threads: List[str] = list(df_i['subject'].unique())
-                # Average thread length
-                # TODO: Refactor to pandas?
-                tot_thread_len = 0
-                thread_data: Dict[str, pd.DataFrame] = {}
-                for thread in threads:
-                    df_thread = df_i[df_i['subject'] == thread]
-                    # TODO: Want to double check that timestamps are still/indeed sorted properly (i) here, and
-                    #  (ii) everywhere else where we're doing timestamps like this
-                    # TODO: better: rather than get the first and last timestamp. should be able to get max() and min()
-                    thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
-                    tot_thread_len += float(f'{thread_len:.1f}')
-                    thread_data[thread] = df_thread
-                avg_thread_len = round(tot_thread_len / len(threads), 3)
-                # Outliers
-                # TODO: Refactor to pandas to reduce lines and improve performance?
-                # TODO: Add cols for 1 and 2 std deviations?
-                # TODO: Might need to make 3 columns for these outliers: std deviations away from (i) keyword avg,
-                #  (ii) category avg, (iii) avg of all of our queried category/keyword threads.
-                # Calc std deviation
-                sum_square_distance = 0
-                for thread in threads:
-                    df_thread = thread_data[thread]
-                    thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
-                    sum_square_distance += (float(thread_len) - float(avg_thread_len)) ** 2
-                stddev_kw_threads = math.sqrt(sum_square_distance / len(threads))
-                # Calc how many std deviations away per thread
-                for thread in threads:
-                    outlier = False
-                    df_thread = thread_data[thread]
-                    thread_len = (list(df_thread['timestamp'])[-1] - list(df_thread['timestamp'])[0]) / seconds_per_day
-                    if thread_len > stddev_kw_threads + avg_thread_len \
-                            or thread_len < avg_thread_len - stddev_kw_threads:
-                        outlier = True
-                    # Calc URL
-                    t = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
-                    url = 'https://chat.fhir.org/#narrow/' + f'{t["type"]}/{t["stream_id"]}-{t["display_recipient"]}' \
-                          + f'/topic/{t["subject"]}'
-                    # Append to report
-                    kw_report = {
-                        'category': category,
-                        'keyword': k,
-                        'keyword_spelling': s,
-                        'avg_thread_len': str(avg_thread_len),
-                        'thread_name': thread,
-                        'thread_length_days': f'{thread_len:.1f}',
-                        'thread_stddev_from_kw_avg_thread_len': '1+' if outlier else '0',
-                        'thread_url': url,
-                        'query_date': today
-                    }
-                    reports.append(kw_report)
+                for context in contexts:
+                    # Get context info
+                    if context:
+                        df_i = _get_messages_with_context(df_i, context)
+                    df_i = df_i.sort_values(['timestamp'])  # oldest first
+                    threads: List[str] = list(df_i['subject'].unique())
+                    # Average thread length
+                    # TODO: Refactor to pandas?
+                    tot_thread_len = 0
+                    thread_data: Dict[str, pd.DataFrame] = {}
+                    for thread in threads:
+                        df_thread = df_i[df_i['subject'] == thread]
+                        # TODO: Want to double check that timestamps are still/indeed sorted properly (i) here, and
+                        #  (ii) everywhere else where we're doing timestamps like this
+                        # TODO: better: rather than get the first & last timestamp. should be able to get max() & min()
+                        thread_len = (list(df_thread['timestamp'])[-1] -
+                                      list(df_thread['timestamp'])[0]) / seconds_per_day
+                        tot_thread_len += float(f'{thread_len:.1f}')
+                        thread_data[thread] = df_thread
+                    avg_thread_len = round(tot_thread_len / len(threads), 3)
+                    # Outliers
+                    # TODO: Refactor to pandas to reduce lines and improve performance?
+                    # TODO: Add cols for 1 and 2 std deviations?
+                    # TODO: Might need to make 3 columns for these outliers: std deviations away from (i) keyword avg,
+                    #  (ii) category avg, (iii) avg of all of our queried category/keyword threads.
+                    # Calc std deviation
+                    sum_square_distance = 0
+                    for thread in threads:
+                        df_thread = thread_data[thread]
+                        thread_len = (list(df_thread['timestamp'])[-1]
+                                      - list(df_thread['timestamp'])[0]) / seconds_per_day
+                        sum_square_distance += (float(thread_len) - float(avg_thread_len)) ** 2
+                    stddev_kw_threads = math.sqrt(sum_square_distance / len(threads))
+                    # Calc how many std deviations away per thread
+                    for thread in threads:
+                        outlier = False
+                        df_thread = thread_data[thread]
+                        thread_len = (list(df_thread['timestamp'])[-1]
+                                      - list(df_thread['timestamp'])[0]) / seconds_per_day
+                        if thread_len > stddev_kw_threads + avg_thread_len \
+                                or thread_len < avg_thread_len - stddev_kw_threads:
+                            outlier = True
+                        # Calc URL
+                        t = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
+                        url = 'https://chat.fhir.org/#narrow/' + \
+                              f'{t["type"]}/{t["stream_id"]}-{t["display_recipient"]}' + f'/topic/{t["subject"]}'
+                        # Append to report
+                        kw_report = {
+                            'category': category,
+                            'keyword': k,
+                            'keyword_spelling': s,
+                            'context': context,
+                            'avg_thread_len': str(avg_thread_len),
+                            'thread_name': thread,
+                            'thread_length_days': f'{thread_len:.1f}',
+                            'thread_stddev_from_kw_avg_thread_len': '1+' if outlier else '0',
+                            'thread_url': url,
+                            'query_date': today
+                        }
+                        reports.append(kw_report)
 
     df_report = pd.DataFrame(reports)
     df_report = format_df(df_report)
@@ -263,11 +342,7 @@ def query_categories(
 ) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
-    cache_df = pd.DataFrame()
-    if not os.path.exists(CACHE_DIR):
-        os.mkdir(CACHE_DIR)
-    if os.path.exists(msg_cache_path):
-        cache_df = pd.read_csv(msg_cache_path)
+    cache_df = _load_cached_messages(msg_cache_path)
 
     # Fetch data for all keywords for all categories
     new_messages: List[Dict] = []
@@ -287,7 +362,7 @@ def query_categories(
                 kw_messages = [
                     {**x, **{'category': category, 'keyword': k, 'keyword_spelling': spelling}} for x in kw_messages]
                 # Edge case handling
-                new_messages += handle_keyword_edge_cases(spelling, kw_messages)
+                new_messages += _handle_keyword_edge_cases(spelling, kw_messages)
                 # Error report
                 errors += [{'keyword_spelling': spelling, 'error_message': error}] if error else []
 
@@ -299,10 +374,6 @@ def query_categories(
     df_raw = format_df(df_raw)
     df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
     df_raw.to_csv(msg_cache_path, index=False)
-    # - report 1: counts and latest/oldest message timestamps && keywords w/ no results
-    create_report1(df=df_raw, category_keywords=category_keywords)
-    # - report 2: thread lengths
-    create_report2(df=df_raw, category_keywords=category_keywords)
     # - errors
     if errors:
         df_errors = pd.DataFrame(errors)
@@ -311,31 +382,9 @@ def query_categories(
     return df_raw
 
 
-# TODO: need to account for spelling variations w/in a new colum in the google sheet
-# todo: $validate-code: there are actually 2 different operations w/ this same name. might need to disambiguate
-def _get_keywords(
-    sheet_name='category_keywords', cache_path=CONFIG['keywords_cache_path'], use_cache_only=False
-) -> TYPE_KEYWORDS_DICT:
-    """Get keywords from google sheets, else cache
-    sheet_name: The name of the specific sheet within a GoogleSheet workbook."""
-    # Load
-    if use_cache_only:
-        df: pd.DataFrame = pd.read_csv(cache_path)
-    else:
-        # PyBroadException: Broad because (a) don't now what failure returns now nor (b) might return in future, and
-        # ...(c) basic usability is more improtant right now. The warning should be sufficient.
-        # noinspection PyBroadException
-        try:
-            # todo: Pass URI too
-            df: pd.DataFrame = get_sheets_data(sheet_name=sheet_name, env_dir=ENV_DIR)
-            df.to_csv(cache_path, index=False)
-        except BaseException:
-            last_modified = str(datetime.utcfromtimestamp(os.path.getmtime(cache_path)))
-            print(f'Warning: Reading from GoogleSheets failed. Using cache: '
-                  f'\n- File name: {os.path.basename(cache_path)}'
-                  f'\n- Last modified: {last_modified}', file=sys.stderr)
-            df: pd.DataFrame = pd.read_csv(cache_path)
-
+def _get_keywords(use_cached_keyword_inputs=False) -> TYPE_KEYWORDS_DICT:
+    """Get keywords iterable"""
+    df: pd.DataFrame = _load_keywords_df(use_cache_only=use_cached_keyword_inputs)
     # Convert to dictionary
     category_keywords: TYPE_KEYWORDS_DICT = {}
     categories = list(df['category'].unique())
@@ -351,12 +400,48 @@ def _get_keywords(
     return category_keywords
 
 
-def run():
+def _get_keyword_contexts(use_cached_keyword_inputs=False) -> Dict[str, List[str]]:
+    """Get keyword contexts
+    If keyword has no contexts, will not be included in the dictionary."""
+    df: pd.DataFrame = _load_keywords_df(use_cache_only=use_cached_keyword_inputs)
+    # Convert to dictionary
+    keyword_contexts: Dict[str, List[str]] = {}
+    for _index, row in df.iterrows():
+        kw = row['keyword']
+        context_str: str = row['context']
+        context_list: List[str] = context_str.split(INTRA_CELL_DELIMITER) if context_str else []
+        if context_list:
+            keyword_contexts[kw] = context_list
+
+    return keyword_contexts
+
+
+def run(analyze_only=False, use_cached_keyword_inputs=False):
     """Run program"""
-    keywords = _get_keywords()
-    return query_categories(keywords)
+    keywords: TYPE_KEYWORDS_DICT = _get_keywords(use_cached_keyword_inputs)
+    message_df: pd.DataFrame = query_categories(keywords) if not analyze_only else _load_cached_messages()
+    kw_contexts: Dict[str, List[str]] = _get_keyword_contexts()
+    # - report 1: counts and latest/oldest message timestamps && keywords w/ no results
+    create_report1(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
+    # - report 2: thread lengths
+    create_report2(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
+
+
+def cli():
+    """Command line interface."""
+    package_description = 'NLP analysis of https://chat.fhir.org'
+    parser = ArgumentParser(description=package_description)
+    parser.add_argument(
+        '-a', '--analyze-only', required=False, action='store_true',
+        help='If present, will perform analysis, but do no new queries.')
+    parser.add_argument(
+        '-c', '--use-cached-keyword-inputs', required=False, action='store_true',
+        help='If present, will not check GoogleSheets for updates to keyword related input data.')
+    kwargs = parser.parse_args()
+    kwargs_dict: Dict = vars(kwargs)
+    run(**kwargs_dict)
 
 
 # Execution
 if __name__ == '__main__':
-    all_results = run()
+    cli()
