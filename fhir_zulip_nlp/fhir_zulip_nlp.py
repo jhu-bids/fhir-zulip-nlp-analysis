@@ -262,18 +262,18 @@ def create_report2(
     reports: List[Dict] = []
     seconds_per_day = 86400
     today = date.today()
-    tot_all, std_all, num_all_threads = 0, 0, 0
-
+    tot_all, std_all, num_all_threads  = 0, 0, 0
+    avg_total,std_tot = 0,0
     for j, (category, keywords) in enumerate(category_keywords.items()):
         tot_category, var_category, avg_category, std_category, num_threads = 0, 0, 0, 0, 0
 
-        for k, spellings in keywords.items():
+        for a,(k, spellings) in enumerate(keywords.items()):
             contexts = kw_contexts.get(k, [])
             # add null context '': needed to capture messages where no context words appear
             contexts = contexts + [''] if '' not in contexts else contexts
-            for s in spellings:
+            for s in (spellings):
                 df_i = df[df['keyword_spelling'] == s]
-                for context in contexts:
+                for context in (contexts):
                     df_j = _get_messages_with_context(df_i, context)
                     df_j = df_j.sort_values(['timestamp'])  # oldest first
                     threads: List[str] = list(df_j['subject'].unique())
@@ -326,16 +326,18 @@ def create_report2(
                         url = 'https://chat.fhir.org/#narrow/' + \
                               f'{t["type"]}/{t["stream_id"]}-{t["display_recipient"]}' + f'/topic/{t["subject"]}'
                         # Append to report
-                        avg_total, std_tot = '', ''
+        
                         if i == len(threads) - 1:
                             avg_category = round(tot_category / num_threads, 2)
                             std_category = round(math.sqrt(var_category / num_threads), 2)
                             num_threads = 0
                             tot_category = 0
                             var_category = 0
-                        elif i == len(threads) - 1 and j == len(list(category)) - 1:
-                            avg_total = round((tot_all / num_all_threads), 2)
-                            std_tot = round(math.sqrt(std_all / num_all_threads), 2)
+                            if a == len(list(keywords.keys()))-1:
+                                avg_total = round((tot_all / num_all_threads), 2)
+                                std_tot = round(math.sqrt(std_all / num_all_threads), 2)
+                            
+                    
                         kw_report = {
                             'category': category,
                             'keyword': k,
@@ -344,15 +346,14 @@ def create_report2(
                             'thread_length_days': f'{thread_len:.1f}',
                             'thread_stddev_from_kw_avg_thread_len': str(round(std_away, 2)),
                             'outlier?': str(outlier),
-                            'avg_total': avg_total,
-                            'std_total': std_tot,
+                            'avg_total': str(avg_total),
+                            'std_total': str(std_tot),
                             'avg_category': avg_category,
                             'std_category': std_category,
                             'thread_url': url,
                             'query_date': today
                         }
-                        avg_category = 0
-                        std_category = 0
+                        avg_category,std_category,avg_total,std_tot = 0,0,0,0
                         reports.append(kw_report)
 
     df_report = pd.DataFrame(reports)
