@@ -49,7 +49,7 @@ CONFIG = {
     'outpath_report1': os.path.join(PROJECT_DIR, 'zulip_report1_counts.csv'),
     'outpath_report2': os.path.join(PROJECT_DIR, 'zulip_report2_thread_lengths.csv'),
     'outpath_errors': os.path.join(PROJECT_DIR, 'zulip_errors.csv'),
-    'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_keywords_with_no_results.csv'),
+    'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_queries_with_no_results.csv'),
     'outpath_raw_results': os.path.join(PROJECT_DIR, RAW_RESULTS_FILENAME),
     'results_cache_path': os.path.join(CACHE_DIR, RAW_RESULTS_FILENAME),
     'keywords_cache_path': os.path.join(CACHE_DIR, 'keywords.csv'),
@@ -99,6 +99,10 @@ def _load_keywords_df(
                   f'\n- File name: {os.path.basename(cache_path)}'
                   f'\n- Last modified: {last_modified}'
                   f'\n- Error: {str(err)}', file=sys.stderr)
+            if 'invalid_grant' in str(err):
+                raise RuntimeError(
+                    'GoogleSheets token will automatically be refreshed the next time this program is run. You can '
+                    'simply run again immediately.')
             df: pd.DataFrame = pd.read_csv(cache_path).fillna('')
 
     # Massage
@@ -138,7 +142,6 @@ def query_keyword(
                 continue
             messages += res['messages']
             if not messages:
-                print(f'No messages found for: {keyword}')
                 break
             anchor = messages[-1]['id']  # returned messages are in chronological order; -1 is most recent in batch
             if res['found_newest']:  # this assumes API will reliably always return this
@@ -199,9 +202,11 @@ def _get_counts_from_kw_messages(
     if context:
         df = _get_messages_with_context(df, context)
     # Calculate thread length
-    df = df.sort_values(['timestamp'])  # oldest first
-    z = ((list(df['timestamp'])[-1] - list(df['timestamp'])[0]) / 86400)
-    threadlen = f'{z:.1f}'
+    threadlen = ''
+    if len(df) > 0:
+        df = df.sort_values(['timestamp'])  # oldest first
+        z = ((list(df['timestamp'])[-1] - list(df['timestamp'])[0]) / 86400)
+        threadlen = f'{z:.1f}'
     # Create report
     kw_report = {
         'category': category,
@@ -223,7 +228,7 @@ def create_report1(
 ) -> (pd.DataFrame, pd.DataFrame):
     """Report 1: counts and latest/oldest message timestamps"""
     reports: List[Dict] = []
-    no_result_keywords: List[str] = []
+    no_results: List[Dict] = []
     today = str(date.today())
     for c, keywords in category_keywords.items():
         for k, spellings in keywords.items():
@@ -236,7 +241,7 @@ def create_report1(
                     kw_report: Dict = _get_counts_from_kw_messages(
                         df=df_i, category=c, keyword=k, spelling=s, today=today, context=context)
                     if kw_report['num_messages_with_kw_spelling'] == 0:
-                        no_result_keywords.append(k)
+                        no_results.append({'keyword': k, 'spelling': s, 'context': context, 'results': 0})
                     reports.append(kw_report)
 
     # Report
@@ -244,8 +249,7 @@ def create_report1(
     df_report = format_df(df_report)
 
     # No results report
-    df_no_results = pd.DataFrame()
-    df_no_results['keywords_with_no_results'] = no_result_keywords
+    df_no_results = pd.DataFrame(no_results)
 
     # Save & return
     df_report.to_csv(CONFIG['outpath_report1'], index=False)
@@ -256,24 +260,29 @@ def create_report1(
 
 
 def create_report2(
-    df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]]
+    df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]],
+    include_all_columns=False
 ) -> (pd.DataFrame, pd.DataFrame):
-    """Report 2: thread lengths"""
+    """Report 2: thread lengths
+    include_all_columns: Pending bugfix. If false, excludes these columns from report.
+    todo: fix category / all messages counts and stddev. Right now the counts are mostly 0; not being calculated based
+     on the correct message selections. Not sure if there are stddev calc issues; could just be because of counts.
+    """
     reports: List[Dict] = []
     seconds_per_day = 86400
     today = date.today()
-    tot_all, std_all, num_all_threads  = 0, 0, 0
-    avg_total,std_tot = 0,0
-    for j, (category, keywords) in enumerate(category_keywords.items()):
+    tot_all, std_all, num_all_threads = 0, 0, 0
+    avg_total, std_tot = 0, 0
+    for i, (category, keywords) in enumerate(category_keywords.items()):
         tot_category, var_category, avg_category, std_category, num_threads = 0, 0, 0, 0, 0
 
-        for a,(k, spellings) in enumerate(keywords.items()):
+        for i2, (k, spellings) in enumerate(keywords.items()):
             contexts = kw_contexts.get(k, [])
             # add null context '': needed to capture messages where no context words appear
             contexts = contexts + [''] if '' not in contexts else contexts
-            for s in (spellings):
-                df_i = df[df['keyword_spelling'] == s]
-                for context in (contexts):
+            for spelling in spellings:
+                df_i = df[df['keyword_spelling'] == spelling]
+                for context in contexts:
                     df_j = _get_messages_with_context(df_i, context)
                     df_j = df_j.sort_values(['timestamp'])  # oldest first
                     threads: List[str] = list(df_j['subject'].unique())
@@ -293,7 +302,7 @@ def create_report2(
                         thread_data[thread] = df_thread
                         num_all_threads += 1
                         tot_all += thread_len
-                    avg_len_kw_thread = round(tot_thread_len / len(threads), 3)
+                    avg_len_kw_thread = round(tot_thread_len / len(threads), 3) if threads else 0
                     # Outliers
                     # TODO: Refactor to pandas to reduce lines and improve performance?
                     # TODO: Add cols for 1 and 2 std deviations?
@@ -306,12 +315,12 @@ def create_report2(
                         thread_len = (list(df_thread['timestamp'])[-1]
                                       - list(df_thread['timestamp'])[0]) / seconds_per_day
                         sum_square_distance += (float(thread_len) - float(avg_len_kw_thread)) ** 2
-                    stddev_kw_threads = math.sqrt(sum_square_distance / len(threads))
+                    stddev_kw_threads = math.sqrt(sum_square_distance / len(threads)) if threads else 0
                     # Calc how many std deviations away per thread
                     tot_category += tot_thread_len
                     var_category += stddev_kw_threads ** 2
                     std_all += stddev_kw_threads ** 2
-                    for i, thread in enumerate(threads):
+                    for i3, thread in enumerate(threads):
                         outlier = False
                         df_thread = thread_data[thread]
                         thread_len = (list(df_thread['timestamp'])[-1]
@@ -321,39 +330,40 @@ def create_report2(
                                 or thread_len < avg_len_kw_thread - stddev_kw_threads:
                             outlier = True
                             std_away = abs(thread_len - avg_len_kw_thread) / stddev_kw_threads
-                        # Calc URL
-                        t = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
-                        url = 'https://chat.fhir.org/#narrow/' + \
-                              f'{t["type"]}/{t["stream_id"]}-{t["display_recipient"]}' + f'/topic/{t["subject"]}'
-                        # Append to report
-        
-                        if i == len(threads) - 1:
+                        if i3 == len(threads) - 1:
                             avg_category = round(tot_category / num_threads, 2)
                             std_category = round(math.sqrt(var_category / num_threads), 2)
                             num_threads = 0
                             tot_category = 0
                             var_category = 0
-                            if a == len(list(keywords.keys()))-1:
+                            if i2 == len(list(keywords.keys())) - 1:
                                 avg_total = round((tot_all / num_all_threads), 2)
                                 std_tot = round(math.sqrt(std_all / num_all_threads), 2)
-                            
-                    
+                        # Calc URL
+                        thread_df = dict(df_thread.iloc[0])  # representative row of whole df; all values should be same
+                        url = 'https://chat.fhir.org/#narrow/' + \
+                              f'{thread_df["type"]}/{thread_df["stream_id"]}-{thread_df["display_recipient"]}' + \
+                              f'/topic/{thread_df["subject"]}'
+                        # Append to report
                         kw_report = {
                             'category': category,
                             'keyword': k,
-                            'kw_avg_thread_len': str(avg_len_kw_thread),
-                            'thread_name': thread,
-                            'thread_length_days': f'{thread_len:.1f}',
-                            'thread_stddev_from_kw_avg_thread_len': str(round(std_away, 2)),
-                            'outlier?': str(outlier),
-                            'avg_total': str(avg_total),
-                            'std_total': str(std_tot),
-                            'avg_category': avg_category,
-                            'std_category': std_category,
+                            'thread': thread,
                             'thread_url': url,
-                            'query_date': today
+                            'thread_len_days': f'{thread_len:.1f}',
+                            'avg_len_kw_outlier?': outlier,
+                            'avg_len_kw': str(avg_len_kw_thread),
+                            'stddev_kw': str(round(std_away, 2)),
+                            'query_date': today,
                         }
-                        avg_category,std_category,avg_total,std_tot = 0,0,0,0
+                        if include_all_columns:
+                            kw_report = {**kw_report, **{
+                                'avg_len_category': avg_category,
+                                'stddev_category': std_category,
+                                'avg_len_total': str(avg_total),
+                                'stddev_total': str(std_tot),
+                            }}
+                        avg_category, std_category, avg_total, std_tot = 0, 0, 0, 0
                         reports.append(kw_report)
 
     df_report = pd.DataFrame(reports)
