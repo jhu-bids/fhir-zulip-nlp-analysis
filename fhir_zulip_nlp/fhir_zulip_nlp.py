@@ -9,6 +9,8 @@ Resources:
   3. The Zulip chat we're querying: https://chat.fhir.org/#
   4. Category keywords google sheet:
      https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/edit#gid=1136391153
+  5. User roles google sheet:
+     https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/edit#gid=1504038457
 
 Possible areas of improvement
   1. Save to calling directory, not project directory.
@@ -23,7 +25,7 @@ import sys
 import time
 from argparse import ArgumentParser
 from datetime import datetime, date
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import zulip
 import pandas as pd
@@ -46,11 +48,15 @@ CONFIG = {
     'zuliprc_path': os.path.join(ENV_DIR, '.zuliprc'),  # rc = "runtime config"
     'chat_stream_name': 'terminology',
     'num_messages_per_query': 1000,
-    'outpath_report1': os.path.join(PROJECT_DIR, 'zulip_report1_counts.csv'),
-    'outpath_report2': os.path.join(PROJECT_DIR, 'zulip_report2_thread_lengths.csv'),
+    'outpath_user_info': os.path.join(PROJECT_DIR, 'zulip_user_info.csv'),
+    'outpath_report_counts': os.path.join(PROJECT_DIR, 'zulip_report1_counts.csv'),
+    'outpath_report_thread_length': os.path.join(PROJECT_DIR, 'zulip_report2_thread_lengths.csv'),
+    'outpath_report_users': os.path.join(PROJECT_DIR, 'zulip_report3_users.csv'),
+    'outpath_report_roles': os.path.join(PROJECT_DIR, 'zulip_report4_user_roles.csv'),  # todo
     'outpath_errors': os.path.join(PROJECT_DIR, 'zulip_errors.csv'),
     'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_queries_with_no_results.csv'),
     'outpath_raw_results': os.path.join(PROJECT_DIR, RAW_RESULTS_FILENAME),
+    'outpath_raw_results_user_participation': os.path.join(PROJECT_DIR, 'zulip_raw_results_user_participation.csv'),
     'results_cache_path': os.path.join(CACHE_DIR, RAW_RESULTS_FILENAME),
     'keywords_cache_path': os.path.join(CACHE_DIR, 'keywords.csv'),
 }
@@ -223,10 +229,10 @@ def _get_counts_from_kw_messages(
     return kw_report
 
 
-def create_report1(
+def create_report_counts(
     df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]]
-) -> (pd.DataFrame, pd.DataFrame):
-    """Report 1: counts and latest/oldest message timestamps"""
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Report: counts and latest/oldest message timestamps"""
     reports: List[Dict] = []
     no_results: List[Dict] = []
     today = str(date.today())
@@ -252,18 +258,18 @@ def create_report1(
     df_no_results = pd.DataFrame(no_results)
 
     # Save & return
-    df_report.to_csv(CONFIG['outpath_report1'], index=False)
+    df_report.to_csv(CONFIG['outpath_report_counts'], index=False)
     if len(df_no_results) > 0:
         df_no_results.to_csv(CONFIG['outpath_no_results'], index=False)
 
     return df_report, df_no_results
 
 
-def create_report2(
+def create_report_thread_length(
     df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]],
     include_all_columns=False
-) -> (pd.DataFrame, pd.DataFrame):
-    """Report 2: thread lengths
+) -> pd.DataFrame:
+    """Report: thread lengths
     include_all_columns: Pending bugfix. If false, excludes these columns from report.
     todo: fix category / all messages counts and stddev. Right now the counts are mostly 0; not being calculated based
      on the correct message selections. Not sure if there are stddev calc issues; could just be because of counts.
@@ -369,8 +375,130 @@ def create_report2(
     df_report = pd.DataFrame(reports)
     df_report = format_df(df_report)
     # Save & return
-    df_report.to_csv(CONFIG['outpath_report2'], index=False)
+    df_report.to_csv(CONFIG['outpath_report_thread_length'], index=False)
     return df_report
+
+
+def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Report: Users
+    # TODO: Bugfix: Major bug; respondent/author counts are not all correct. This is because (i) threads are being
+       counted multiple times when multiple keywords are matched against them, and (ii) we are *only* counting messages
+       within threads that have keyword matches; not every message in every thread that has a keyword match for any
+       message.
+    # todo: Pending completion of 'streams' issue, change output `stream_id` -> `stream` / `stream_name`
+    # todo: Does it make sense to refactor this to start with users first, then drill down?"""
+    stream_id_name_map = {'179202': 'terminology'}
+
+    # Get basic user data
+    user_ids: List[int] = list(df['sender_id'].unique())
+    user_data: Dict[int, Dict[str, Any]] = {}
+    for user_id in user_ids:
+        df_i = df[df['sender_id'] == user_id].iloc[0]
+        user_data[user_id] = {
+            'user_id': user_id,
+            'full_name': df_i['sender_full_name'],
+            'email': df_i['sender_email']
+        }
+    user_info_df = pd.DataFrame(user_data.values())
+    user_info_df.to_csv(CONFIG['outpath_user_info'], index=False)
+
+    # todo: not sure which of these user data structures i'll use, or both
+    # TODO: I really don't like how repetitive this is
+    user_participation_by_user: Dict[int, List[Dict[str, Any]]] = {u: [] for u in user_ids}
+    user_participation: List[Dict[str, Any]] = []
+    streams = df['stream_id'].unique()
+    for stream_id in streams:
+        stream_name = stream_id_name_map[str(stream_id)]
+        df_i = df[df['stream_id'] == stream_id]
+        # todo: Would they like the 0 totals as well? If so, rather than .unique(), should use `category_keywords`
+        categories = df_i['category'].unique()
+        for c in categories:
+            df_i2 = df_i[df_i['category'] == c]
+            keywords = df_i2['keyword'].unique()
+            for k in keywords:
+                df_i3 = df_i2[df_i2['keyword'] == k]
+                threads = df_i3['subject'].unique()
+                for thread in threads:
+                    df_i4 = df_i3[df_i3['subject'] == thread]
+                    # Get authorship vs non-authorship
+                    participant_roles = {p: 'respondent' for p in df_i4['sender_id'].unique()}
+                    author_timestamp = min(df_i4['timestamp'])
+                    author_id: int = list(
+                        df_i4[df_i4['timestamp'] == author_timestamp]['sender_id'].to_dict().values())[0]
+                    participant_roles[author_id] = 'author'
+
+                    # Populate: user_participation
+                    for user_id, role in participant_roles.items():
+                        row = {
+                            'user.id': user_id,
+                            'user.full_name': user_data[user_id]['full_name'],
+                            'stream': stream_name,
+                            'category': c,
+                            'keyword': k,
+                            'thread': thread,
+                            'user.role': role
+                        }
+                        user_participation_by_user[user_id].append(row)
+                        user_participation.append(row)
+    user_participation_df = pd.DataFrame(user_participation)
+    user_participation_df.to_csv(CONFIG['outpath_raw_results_user_participation'], index=False)
+
+    # TODO: I really don't like how repetitive this is; even worse than previous block
+    # TODO: Have aggregated to keyword, category, and stream, but not to role agnostic of stream. Would be useful to add
+    #  ...this, once streams feature is complete.
+    # TODO: aggregate to agnostic of role? for every level? stream, category, keyword? If so, can call 'participant'
+    user_participation_stats = []
+    for user_id in user_ids:
+        df_i = user_participation_df[user_participation_df['user.id'] == user_id]
+        streams = list(df_i['stream'].unique())
+        for s in streams:
+            df_i2 = df_i[df_i['stream'] == s]
+            role_counts: Dict[str, int] = df_i2['user.role'].value_counts().to_dict()
+            for role, count in role_counts.items():
+                row = {
+                    'user.id': user_id,
+                    'user.full_name': user_data[user_id]['full_name'],
+                    'stream': s,
+                    'category': '',
+                    'keyword': '',
+                    'role': role,
+                    'count': count,
+                }
+                user_participation_stats.append(row)
+            categories = list(df_i2['category'].unique())
+            for c in categories:
+                df_i3 = df_i2[df_i2['category'] == c]
+                role_counts: Dict[str, int] = df_i3['user.role'].value_counts().to_dict()
+                for role, count in role_counts.items():
+                    row = {
+                        'user.id': user_id,
+                        'user.full_name': user_data[user_id]['full_name'],
+                        'stream': s,
+                        'category': c,
+                        'keyword': '',
+                        'role': role,
+                        'count': count,
+                    }
+                    user_participation_stats.append(row)
+                keywords = list(df_i2['keyword'].unique())
+                for k in keywords:
+                    df_i4 = df_i3[df_i3['keyword'] == k]
+                    role_counts: Dict[str, int] = df_i4['user.role'].value_counts().to_dict()
+                    for role, count in role_counts.items():
+                        row = {
+                            'user.id': user_id,
+                            'user.full_name': user_data[user_id]['full_name'],
+                            'stream': s,
+                            'category': c,
+                            'keyword': k,
+                            'role': role,
+                            'count': count,
+                        }
+                        user_participation_stats.append(row)
+    user_participation_stats_df = pd.DataFrame(user_participation_stats)
+    user_participation_stats_df.to_csv(CONFIG['outpath_report_users'], index=False)
+
+    return user_info_df, user_participation_df, user_participation_stats_df
 
 
 # TODO: In order to account for the possibility that people could edit their prior messages, can add as a param to this
@@ -461,13 +589,15 @@ def _get_keyword_contexts(use_cached_keyword_inputs=False) -> Dict[str, List[str
 
 def run(analyze_only=False, use_cached_keyword_inputs=False):
     """Run program"""
+    # Get inputs
     keywords: TYPE_KEYWORDS_DICT = _get_keywords(use_cached_keyword_inputs)
-    message_df: pd.DataFrame = query_categories(keywords) if not analyze_only else _load_cached_messages()
     kw_contexts: Dict[str, List[str]] = _get_keyword_contexts()
-    # - report 1: counts and latest/oldest message timestamps && keywords w/ no results
-    create_report1(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
-    # - report 2: thread lengths
-    create_report2(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
+    # Get messages
+    message_df: pd.DataFrame = query_categories(keywords) if not analyze_only else _load_cached_messages()
+    # Create reports
+    create_report_counts(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
+    create_report_thread_length(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
+    create_report_users(message_df)
 
 
 def cli():
