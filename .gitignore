@@ -3,6 +3,7 @@ __pycache__/
 _archive/
 _dev/
 .idea/
+*.pickle
 .env
 build/
 dev/

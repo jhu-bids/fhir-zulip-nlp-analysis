@@ -21,3 +21,35 @@ pattern `fhir-zulip-nlp*.csv`.
 
 Releases from previous runs have been uploaded on [GitHub](https://github.com/jhu-bids/fhir-zulip-nlp-analysis/releases)
 and [GoogleDrive](https://drive.google.com/drive/u/0/folders/16MFLnKoKA5gk4ELbSnVS2GCjgR_R0ETL).
+
+### Codebook
+#### `zulip_raw_results.csv`
+TODO
+
+#### `zulip_raw_results_user_participation.csv`
+TODO
+
+#### `zulip_report_queries_with_no_results.csv`
+TODO
+
+#### `zulip_user_info.csv`
+TODO
+
+#### `zulip_report1_counts.csv`
+TODO
+
+#### `zulip_report2_thread_lengths.csv`
+TODO
+
+#### `zulip_report3_users.csv`
+- `user.id` (`integer`): Zulip-assigned user ID. Can look up this ID in `zulip_user_info.csv` to find more info.
+- `user.full_name` (`string`): Full name of user.
+- `stream` (`string`): Zulip stream.
+- `category` (`string`): Category as defined in [GoogleSheet](https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/).
+- `keyword` (`string`): Keyword as defined in [GoogleSheet](https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/).
+- `role` (`string`): Either 'author' or 'respondent'.
+- `count` (`integer`): The sum total for of the combination of **`user` x `stream` x `category` x `keyword` x `role`** 
+  for the given row. If any of these cells in the row is empty, it means that this row represents a higher-level 
+  aggregation. E.g. if only `keyword` is empty, the `count` represents the combo of **`user` x `stream` x `category` x 
+  `role`**. If `keyword` and `category` are empty, the `count` represents the combo of **`user` x `stream` x 
+  `role`**.
