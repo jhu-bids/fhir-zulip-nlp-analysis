@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from argparse import ArgumentParser
+from copy import copy
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -43,10 +44,12 @@ PKG_DIR = os.path.dirname(os.path.realpath(__file__))
 PROJECT_DIR = os.path.join(PKG_DIR, '..')
 ENV_DIR = os.path.join(PROJECT_DIR, 'env')
 CACHE_DIR = os.path.join(PKG_DIR, 'cache')
-RAW_RESULTS_FILENAME = 'zulip_raw_results.csv'
+# TODO: change CSV names to clarify that `zulip_raw_results.csv` is only for queried / matched messages
+RAW_RESULTS_MATCHES_FILENAME = 'zulip_raw_results.csv'
+RAW_RESULTS_ALL_FILENAME = 'zulip_raw_results_all.csv'
 CONFIG = {
     'zuliprc_path': os.path.join(ENV_DIR, '.zuliprc'),  # rc = "runtime config"
-    'chat_stream_name': 'terminology',
+    'streams': ['terminology'],
     'num_messages_per_query': 1000,
     'outpath_user_info': os.path.join(PROJECT_DIR, 'zulip_user_info.csv'),
     'outpath_report_counts': os.path.join(PROJECT_DIR, 'zulip_report1_counts.csv'),
@@ -55,9 +58,11 @@ CONFIG = {
     'outpath_report_roles': os.path.join(PROJECT_DIR, 'zulip_report4_user_roles.csv'),  # todo
     'outpath_errors': os.path.join(PROJECT_DIR, 'zulip_errors.csv'),
     'outpath_no_results': os.path.join(PROJECT_DIR, 'zulip_report_queries_with_no_results.csv'),
-    'outpath_raw_results': os.path.join(PROJECT_DIR, RAW_RESULTS_FILENAME),
+    'outpath_raw_results_messages_matches': os.path.join(PROJECT_DIR, RAW_RESULTS_MATCHES_FILENAME),
+    'outpath_raw_results_messages_all': os.path.join(PROJECT_DIR, RAW_RESULTS_ALL_FILENAME),
     'outpath_raw_results_user_participation': os.path.join(PROJECT_DIR, 'zulip_raw_results_user_participation.csv'),
-    'results_cache_path': os.path.join(CACHE_DIR, RAW_RESULTS_FILENAME),
+    'results_cache_path_messages_matches': os.path.join(CACHE_DIR, RAW_RESULTS_MATCHES_FILENAME),
+    'results_cache_path_messages_all': os.path.join(CACHE_DIR, RAW_RESULTS_ALL_FILENAME),
     'keywords_cache_path': os.path.join(CACHE_DIR, 'keywords.csv'),
 }
 CLIENT = zulip.Client(config_file=CONFIG['zuliprc_path'])
@@ -74,7 +79,7 @@ def _get_list_from_delimited_cell_string(s, delimiter=INTRA_CELL_DELIMITER):
     return [x.strip() for x in s.split(delimiter)]
 
 
-def _load_cached_messages(msg_cache_path=CONFIG['results_cache_path']):
+def _load_cached_messages(msg_cache_path: str):
     """Load cached messages"""
     cache_df = pd.DataFrame()
     if not os.path.exists(CACHE_DIR):
@@ -87,12 +92,12 @@ def _load_cached_messages(msg_cache_path=CONFIG['results_cache_path']):
 def _load_keywords_df(
     sheet_name='category_keywords', cache_path=CONFIG['keywords_cache_path'], use_cache_only=False
 ) -> pd.DataFrame:
-    """Get keywords data from google sheets, else cache
+    """Get keywords data from GoogleSheets, else cache
         sheet_name: The name of the specific sheet within a GoogleSheet workbook."""
     if use_cache_only:
         df: pd.DataFrame = pd.read_csv(cache_path).fillna('')
     else:
-        # PyBroadException: Broad because (a) don't now what failure returns now nor (b) might return in future, and
+        # PyBroadException: Broad because (a) don't know what failure returns now nor (b) might return in future, and
         # ...(c) basic usability is more improtant right now. The warning should be sufficient.
         # noinspection PyBroadException
         try:
@@ -117,21 +122,25 @@ def _load_keywords_df(
     return df
 
 
-def message_pull(anchor: Union[int, str], num_before: int, num_after: int, keyword: str) -> Dict:
+def message_pull(
+    anchor: Union[int, str], num_before: int, num_after: int, stream: str = None, keyword: str = None
+) -> Dict:
     """Get messages: https://zulip.com/api/get-messages"""
     request = {
         "anchor": anchor if anchor != 0 else 'oldest',
         "num_before": num_before,
         "num_after": num_after,
-        "narrow": [
-            {"operator": "stream", "operand": CONFIG['chat_stream_name']},
-            {"operator": "search", "operand": keyword}]}
+        "narrow": []}
+    if keyword:
+        request['narrow'].append({"operator": "search", "operand": keyword})
+    if stream:
+        request['narrow'].append({"operator": "stream", "operand": stream})
     result = CLIENT.get_messages(request)
     return result
 
 
-def query_keyword(
-    keyword: str, anchor: int = 0, num_after: int = CONFIG['num_messages_per_query']
+def query_handler(
+    keyword: str = None, stream: str = None, anchor: int = 0, num_after: int = CONFIG['num_messages_per_query']
 ) -> (List[Dict], Optional[str]):
     """Fetch data from API
     anchor: Integer message ID to anchor fetching of new messages. Supports special string values too; to learn more,
@@ -141,7 +150,7 @@ def query_keyword(
     messages: List[Dict] = []
     try:
         while True:
-            res: Dict = message_pull(anchor=anchor, num_before=0, num_after=num_after, keyword=keyword)
+            res: Dict = message_pull(anchor=anchor, num_before=0, num_after=num_after, keyword=keyword, stream=stream)
             if 'retry-after' in res:  # rate limit, 200messages/user/minute
                 wait_seconds_required: float = res['retry-after']
                 time.sleep(wait_seconds_required * 1000)  # ms
@@ -152,12 +161,13 @@ def query_keyword(
             anchor = messages[-1]['id']  # returned messages are in chronological order; -1 is most recent in batch
             if res['found_newest']:  # this assumes API will reliably always return this
                 break
-    # TODO: @Rohan: We may never need this, but the API could change and things could break. I'm not sure whether or not
-    #  ...this is the best approach, continuing after error. Or maybe it should just exit? What do you think?
     except Exception as err:
         err_msg = str(err)
-        print(f'Got error querying {keyword}. Original error: {err_msg}', file=sys.stderr)
-        print(f'Stopping for "{keyword}" and continuing on with the next keyword.', file=sys.stderr)
+        if keyword:
+            print(f'Got error querying {keyword}. Original error: {err_msg}', file=sys.stderr)
+            print(f'Stopping for "{keyword}" and continuing on with the next keyword.', file=sys.stderr)
+        else:
+            print(f'Error while querying. Exiting gracefully. Original error: {err_msg}', file=sys.stderr)
 
     return messages, err_msg
 
@@ -174,7 +184,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _handle_keyword_edge_cases(keyword: str, messages: List[Dict]):
-    """Filter out / etc special edge cases in API responses"""
+    """Filter out / etc. special edge cases in API responses"""
     new_list = []
     for x in messages:
         # - Filter out: Handle case where the text of one keyword is fully contained within another keyword
@@ -232,7 +242,13 @@ def _get_counts_from_kw_messages(
 def create_report_counts(
     df: pd.DataFrame, category_keywords: TYPE_KEYWORDS_DICT, kw_contexts: Dict[str, List[str]]
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Report: counts and latest/oldest message timestamps"""
+    """Report: counts and latest/oldest message timestamps
+
+    Warning: If this report is altered to show aggregate results (e.g. at the stream or category level), it is necessary
+    to filter out duplicate threads that are matched by multiple keywords. For reference, this is done in the 'user
+    participation' report, identifying threads by the combination of the 'stream' ('stream_id' or 'display_recipient')
+    field and the 'thread name' (subject) field, and then de-duping.
+    """
     reports: List[Dict] = []
     no_results: List[Dict] = []
     today = str(date.today())
@@ -270,7 +286,15 @@ def create_report_thread_length(
     include_all_columns=False
 ) -> pd.DataFrame:
     """Report: thread lengths
+
     include_all_columns: Pending bugfix. If false, excludes these columns from report.
+
+    Warning: If this report is altered to show aggregate results (e.g. message counts, average thread length, standard
+    deviation of thread length) at the stream or category level), it is necessary to filter out duplicate threads that
+    are matched by multiple keywords. For reference, this is done in the 'user participation' report, identifying
+    threads by the combination of the 'stream' ('stream_id' or 'display_recipient') field and the 'thread name'
+    (subject) field, and then de-duping.
+
     todo: fix category / all messages counts and stddev. Right now the counts are mostly 0; not being calculated based
      on the correct message selections. Not sure if there are stddev calc issues; could just be because of counts.
     """
@@ -379,21 +403,40 @@ def create_report_thread_length(
     return df_report
 
 
-def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Report: Users
-    # TODO: Bugfix: Major bug; respondent/author counts are not all correct. This is because (i) threads are being
-       counted multiple times when multiple keywords are matched against them, and (ii) we are *only* counting messages
-       within threads that have keyword matches; not every message in every thread that has a keyword match for any
-       message.
-    # todo: Pending completion of 'streams' issue, change output `stream_id` -> `stream` / `stream_name`
-    # todo: Does it make sense to refactor this to start with users first, then drill down?"""
-    stream_id_name_map = {'179202': 'terminology'}
+def create_report_users(
+    df_all: pd.DataFrame, df_matches: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Report: Users"""
+    # display_recipient: Data on the recipient of the message; either the name of a stream or a dictionary containing
+    # basic data on the users who received the message. See: https://zulip.com/api/get-messages
+    stream_name_field = 'display_recipient'
+
+    # Add only messages from `df_all` that aren't in `df_matches`
+    # - Create common primary key
+    for df_i in [df_all, df_matches]:
+        df_i['thread.id'] = df_i.apply(lambda x: x['display_recipient'] + x['subject'], axis=1)
+    # - Split unmatched messages: (i) share a common thread in `df_matches`, and (ii) share no common thread
+    existing_matched_msg_ids = set(df_matches['id'])
+    existing_matched_thread_ids = set(df_matches['thread.id'])
+    df_all_related_rows = []
+    # TODO: If requested, we can use 'unrelated' data; that is, messages that did not match any of our keywords, nor did
+    #  ...they appear in any threads containing any messages that matched any of our keywords.
+    # df_all_unrelated_rows = []
+    for _index, row in df_all.iterrows():
+        if row['id'] not in existing_matched_msg_ids and row['thread.id'] in existing_matched_thread_ids:
+            df_all_related_rows.append(row)
+        # else:
+        #     df_all_unrelated_rows.append(row)
+    df_all_related = pd.DataFrame(df_all_related_rows)
+    # df_all_unrelated = pd.DataFrame(df_all_unrelated_rows)
 
     # Get basic user data
-    user_ids: List[int] = list(df['sender_id'].unique())
+    matched_user_ids: List[int] = list(df_matches['sender_id'].unique())
+    df_combined = pd.concat([df_all, df_matches])
+    user_ids: List[int] = list(df_combined['sender_id'].unique())
     user_data: Dict[int, Dict[str, Any]] = {}
     for user_id in user_ids:
-        df_i = df[df['sender_id'] == user_id].iloc[0]
+        df_i = df_combined[df_combined['sender_id'] == user_id].iloc[0]
         user_data[user_id] = {
             'user_id': user_id,
             'full_name': df_i['sender_full_name'],
@@ -402,15 +445,13 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
     user_info_df = pd.DataFrame(user_data.values())
     user_info_df.to_csv(CONFIG['outpath_user_info'], index=False)
 
-    # todo: not sure which of these user data structures i'll use, or both
-    # TODO: I really don't like how repetitive this is
-    user_participation_by_user: Dict[int, List[Dict[str, Any]]] = {u: [] for u in user_ids}
+    # todo: I really don't like how repetitive this is
+    # todo: This could also probably use a refactor after adding 'thread.id' logic; maybe via a thread-centric df.
     user_participation: List[Dict[str, Any]] = []
-    streams = df['stream_id'].unique()
-    for stream_id in streams:
-        stream_name = stream_id_name_map[str(stream_id)]
-        df_i = df[df['stream_id'] == stream_id]
-        # todo: Would they like the 0 totals as well? If so, rather than .unique(), should use `category_keywords`
+    df = df_matches  # assign to shorter variable for more readable code
+    streams = df[stream_name_field].unique()
+    for stream in streams:
+        df_i = df[df[stream_name_field] == stream]
         categories = df_i['category'].unique()
         for c in categories:
             df_i2 = df_i[df_i['category'] == c]
@@ -420,25 +461,27 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
                 threads = df_i3['subject'].unique()
                 for thread in threads:
                     df_i4 = df_i3[df_i3['subject'] == thread]
+                    # Get all messages in thread, combining these matched messages w/ unmatched ones
+                    df_thread_related = df_all_related[df_all_related['thread.id'] == stream + thread]
+                    df_i4b = pd.concat([df_i4, df_thread_related]).fillna('')
                     # Get authorship vs non-authorship
-                    participant_roles = {p: 'respondent' for p in df_i4['sender_id'].unique()}
-                    author_timestamp = min(df_i4['timestamp'])
+                    participant_roles = {p: 'respondent' for p in df_i4b['sender_id'].unique()}
+                    author_timestamp = min(df_i4b['timestamp'])
                     author_id: int = list(
-                        df_i4[df_i4['timestamp'] == author_timestamp]['sender_id'].to_dict().values())[0]
+                        df_i4b[df_i4b['timestamp'] == author_timestamp]['sender_id'].to_dict().values())[0]
                     participant_roles[author_id] = 'author'
-
                     # Populate: user_participation
                     for user_id, role in participant_roles.items():
                         row = {
                             'user.id': user_id,
                             'user.full_name': user_data[user_id]['full_name'],
-                            'stream': stream_name,
+                            'stream': stream,
                             'category': c,
                             'keyword': k,
-                            'thread': thread,
+                            'thread.name': thread,
+                            'thread.id': stream + thread,
                             'user.role': role
                         }
-                        user_participation_by_user[user_id].append(row)
                         user_participation.append(row)
     user_participation_df = pd.DataFrame(user_participation)
     user_participation_df.to_csv(CONFIG['outpath_raw_results_user_participation'], index=False)
@@ -446,14 +489,15 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
     # TODO: I really don't like how repetitive this is; even worse than previous block
     # TODO: Have aggregated to keyword, category, and stream, but not to role agnostic of stream. Would be useful to add
     #  ...this, once streams feature is complete.
-    # TODO: aggregate to agnostic of role? for every level? stream, category, keyword? If so, can call 'participant'
     user_participation_stats = []
-    for user_id in user_ids:
+    for user_id in matched_user_ids:
         df_i = user_participation_df[user_participation_df['user.id'] == user_id]
         streams = list(df_i['stream'].unique())
         for s in streams:
             df_i2 = df_i[df_i['stream'] == s]
-            role_counts: Dict[str, int] = df_i2['user.role'].value_counts().to_dict()
+            df_i2_unique_threads = copy(df_i2)
+            df_i2_unique_threads = df_i2_unique_threads.drop_duplicates(subset='thread.id')
+            role_counts: Dict[str, int] = df_i2_unique_threads['user.role'].value_counts().to_dict()
             for role, count in role_counts.items():
                 row = {
                     'user.id': user_id,
@@ -461,14 +505,16 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
                     'stream': s,
                     'category': '',
                     'keyword': '',
-                    'role': role,
-                    'count': count,
+                    'thread.role': role,
+                    'thread.count': count,
                 }
                 user_participation_stats.append(row)
             categories = list(df_i2['category'].unique())
             for c in categories:
                 df_i3 = df_i2[df_i2['category'] == c]
-                role_counts: Dict[str, int] = df_i3['user.role'].value_counts().to_dict()
+                df_i3_unique_threads = copy(df_i3)
+                df_i3_unique_threads = df_i3_unique_threads.drop_duplicates(subset='thread.id')
+                role_counts: Dict[str, int] = df_i3_unique_threads['user.role'].value_counts().to_dict()
                 for role, count in role_counts.items():
                     row = {
                         'user.id': user_id,
@@ -476,8 +522,8 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
                         'stream': s,
                         'category': c,
                         'keyword': '',
-                        'role': role,
-                        'count': count,
+                        'thread.role': role,
+                        'thread.count': count,
                     }
                     user_participation_stats.append(row)
                 keywords = list(df_i2['keyword'].unique())
@@ -491,14 +537,52 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
                             'stream': s,
                             'category': c,
                             'keyword': k,
-                            'role': role,
-                            'count': count,
+                            'thread.role': role,
+                            'thread.count': count,
                         }
                         user_participation_stats.append(row)
     user_participation_stats_df = pd.DataFrame(user_participation_stats)
     user_participation_stats_df.to_csv(CONFIG['outpath_report_users'], index=False)
 
     return user_info_df, user_participation_df, user_participation_stats_df
+
+
+def query_all_messages(
+    streams=CONFIG['streams'], outpath=CONFIG['outpath_raw_results_messages_all'],
+    cache_path=CONFIG['results_cache_path_messages_all']
+):
+    """Query all messages according to global `CONFIG`."""
+    # Load cache
+    cache_df: pd.DataFrame = _load_cached_messages(cache_path)
+
+    # Fetch data for all keywords for all categories
+    new_messages: List[Dict] = []
+    errors: List[str] = []
+    for stream in streams:
+        # Get latest message ID from cache
+        last_msg_id = 0  # Zulip API: 0 means no last message ID
+        if len(cache_df) > 0:
+            last_msg_id = list(cache_df['id'])[-1]
+        # Raw messages from Zulip API
+        kw_messages, error = query_handler(stream=stream, anchor=last_msg_id)
+        new_messages += kw_messages
+        if error:
+            errors.append(error)
+
+    # Save outputs
+    # - raw messages
+    # noinspection DuplicatedCode
+    df_raw_new = pd.DataFrame(new_messages)
+    df_raw = pd.concat([cache_df, df_raw_new])
+    df_raw = df_raw.sort_values(['timestamp'], ascending=True)
+    df_raw.to_csv(outpath, index=False)
+    df_raw.to_csv(cache_path, index=False)
+    # - errors
+    if errors:
+        df_errors = pd.DataFrame(errors)
+        df_errors.to_csv(CONFIG['outpath_errors'], index=False, mode='a')
+
+    return df_raw
 
 
 # TODO: In order to account for the possibility that people could edit their prior messages, can add as a param to this
@@ -509,46 +593,50 @@ def create_report_users(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, p
 #  "Terminology Svc", "$lookup" and "lookup operation(s)", etc.
 # TODO: keyword_variations: consider adding column to spreadsheet and using e.g. V2 variations would be "V2, Version 2"
 def query_categories(
-    category_keywords: TYPE_KEYWORDS_DICT, msg_cache_path=CONFIG['results_cache_path']
+    category_keywords: TYPE_KEYWORDS_DICT, streams=CONFIG['streams'],
+    outpath=CONFIG['outpath_raw_results_messages_matches'], cache_path=CONFIG['results_cache_path_messages_matches'],
 ) -> pd.DataFrame:
     """Get all dictionaries"""
     # Load cache
-    cache_df = _load_cached_messages(msg_cache_path)
+    cache_df: pd.DataFrame = _load_cached_messages(cache_path)
 
     # Fetch data for all keywords for all categories
     new_messages: List[Dict] = []
     errors: List[Dict[str, str]] = []
-    for category, keyword_spellings in category_keywords.items():
-        for k, spellings in keyword_spellings.items():
-            for spelling in spellings:
-                # Get latest message ID from cache
-                last_msg_id = 0  # Zulip API: 0 means no last message ID
-                if len(cache_df) > 0:
-                    cache_df_i = cache_df[cache_df['keyword_spelling'] == spelling]
-                    if len(cache_df_i) > 0:
-                        last_msg_id = list(cache_df_i['id'])[-1]
-                # Raw messages from Zulip API
-                kw_messages, error = query_keyword(keyword=spelling, anchor=last_msg_id)
-                # Combine Zulip results w/ additional info
-                kw_messages = [
-                    {**x, **{'category': category, 'keyword': k, 'keyword_spelling': spelling}} for x in kw_messages]
-                # Edge case handling
-                new_messages += _handle_keyword_edge_cases(spelling, kw_messages)
-                # Error report
-                errors += [{'keyword_spelling': spelling, 'error_message': error}] if error else []
+    for stream in streams:
+        for category, keyword_spellings in category_keywords.items():
+            for k, spellings in keyword_spellings.items():
+                for spelling in spellings:
+                    # Get latest message ID from cache
+                    last_msg_id = 0  # Zulip API: 0 means no last message ID
+                    if len(cache_df) > 0:
+                        cache_df_i = cache_df[cache_df['keyword_spelling'] == spelling]
+                        if len(cache_df_i) > 0:
+                            last_msg_id = list(cache_df_i['id'])[-1]
+                    # Raw messages from Zulip API
+                    kw_messages, error = query_handler(keyword=spelling, stream=stream, anchor=last_msg_id)
+                    # Combine Zulip results w/ additional info
+                    kw_messages = [
+                        {**x, **{'category': category, 'keyword': k, 'keyword_spelling': spelling}}
+                        for x in kw_messages]
+                    # Edge case handling
+                    new_messages += _handle_keyword_edge_cases(spelling, kw_messages)
+                    # Error report
+                    errors += [{'keyword_spelling': spelling, 'error_message': error}] if error else []
 
     # Save outputs
     # - raw messages
+    # noinspection DuplicatedCode
     df_raw_new = pd.DataFrame(new_messages)
     df_raw_new = format_df(df_raw_new)  # todo: this may not be necessary; remove?
     df_raw = pd.concat([cache_df, df_raw_new])
     df_raw = format_df(df_raw)
-    df_raw.to_csv(CONFIG['outpath_raw_results'], index=False)
-    df_raw.to_csv(msg_cache_path, index=False)
+    df_raw.to_csv(outpath, index=False)
+    df_raw.to_csv(cache_path, index=False)
     # - errors
     if errors:
         df_errors = pd.DataFrame(errors)
-        df_errors.to_csv(CONFIG['outpath_errors'], index=False)
+        df_errors.to_csv(CONFIG['outpath_errors'], index=False, mode='a')
 
     return df_raw
 
@@ -593,11 +681,14 @@ def run(analyze_only=False, use_cached_keyword_inputs=False):
     keywords: TYPE_KEYWORDS_DICT = _get_keywords(use_cached_keyword_inputs)
     kw_contexts: Dict[str, List[str]] = _get_keyword_contexts()
     # Get messages
-    message_df: pd.DataFrame = query_categories(keywords) if not analyze_only else _load_cached_messages()
+    messages_matches_df: pd.DataFrame = query_categories(keywords) if not analyze_only else \
+        _load_cached_messages(CONFIG['results_cache_path_messages_matches'])
+    messages_all_df: pd.DataFrame = query_all_messages() if not analyze_only else \
+        _load_cached_messages(CONFIG['results_cache_path_messages_all'])
     # Create reports
-    create_report_counts(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
-    create_report_thread_length(df=message_df, category_keywords=keywords, kw_contexts=kw_contexts)
-    create_report_users(message_df)
+    create_report_counts(df=messages_matches_df, category_keywords=keywords, kw_contexts=kw_contexts)
+    create_report_thread_length(df=messages_matches_df, category_keywords=keywords, kw_contexts=kw_contexts)
+    create_report_users(df_all=messages_all_df, df_matches=messages_matches_df)
 
 
 def cli():
