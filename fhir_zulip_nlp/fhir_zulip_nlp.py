@@ -29,6 +29,7 @@ from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import zulip
+import matplotlib.pyplot as plt
 import pandas as pd
 
 try:
@@ -405,7 +406,7 @@ def create_report_thread_length(
 
 def create_report_users(
     df_all: pd.DataFrame, df_matches: pd.DataFrame
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> Dict[str, pd.DataFrame]:
     """Report: Users"""
     # display_recipient: Data on the recipient of the message; either the name of a stream or a dictionary containing
     # basic data on the users who received the message. See: https://zulip.com/api/get-messages
@@ -544,7 +545,97 @@ def create_report_users(
     user_participation_stats_df = pd.DataFrame(user_participation_stats)
     user_participation_stats_df.to_csv(CONFIG['outpath_report_users'], index=False)
 
-    return user_info_df, user_participation_df, user_participation_stats_df
+    return {
+        'user_info': user_info_df,
+        'user_participation': user_participation_df,
+        'user_participation_stats': user_participation_stats_df
+    }
+
+
+def plot_category_msg_counts_by_year():
+    """plot"""
+    # create data
+    df = pd.read_csv(CONFIG['outpath_raw_results_messages_matches']).fillna('')
+    df['year'] = df['timestamp'].apply(
+        lambda x: int(datetime.utcfromtimestamp(x).strftime('%Y')))
+
+    # Iterate
+    years = df['year'].unique()
+    years.sort()
+    categories = df['category'].unique()
+    category_kw_year_counts = {}
+    for c in categories:
+        df_i = df[df['category'] == c]
+        keywords = df_i['keyword'].unique()
+        kw_year_counts= {}
+        for kw in keywords:
+            df_i2 = df_i[df_i['keyword'] == kw]
+            year_counts = []
+            for year in years:
+                df_i3 = df_i2[df_i2['year'] == year]
+                year_counts.append(len(df_i3))
+            kw_year_counts[kw] = year_counts
+        category_kw_year_counts[c] = kw_year_counts
+
+    # Plot
+    # TODO: save legend as separate file
+    # todo: legend go on side (if more than 8-10 itmems only?)
+    variations = [{'legend': False, 'line_labs': False}, {'legend': True, 'line_labs': True},
+                  {'legend': True, 'line_labs': False}, {'legend': False, 'line_labs': True}]
+    for v in variations:
+        for c, kw_year_counts in category_kw_year_counts.items():
+            fig, ax = plt.subplots()  #
+            year_i = 0
+            for kw, year_counts in kw_year_counts.items():
+                ax.plot(years, year_counts, label=kw)
+                if v['line_labs']:
+                    # attempt 1
+                    # ax.plot(years, year_counts)
+                    # ax.lines[-1].set_label(kw)
+                    # attempt 2
+                    # line, = ax.plot(years, year_counts, label=kw)
+                    # line.set_label(kw)
+                    # attempt 3
+                    # todo: how to get color?
+                    ax.text(years[year_i], year_counts[year_i], kw)
+                year_i = 0 if year_i == len(years) - 1 else year_i + 1
+            if v['legend']:
+                plt.legend()
+            legend_str = '' if not v['legend'] else ' - legend'
+            lab_str = '' if not v['line_labs'] else ' - line_labels'
+            # legend_lab = '' if show_legend else ' - no legend'
+            # ax.set_xlabel('Year')  # don't need; implicit
+            ax.set_ylabel('n Messages')
+            ax.set_title(c.replace('_', '').title())
+            plt.savefig(os.path.join(PROJECT_DIR, f'kw year counts - {c}{legend_str}{lab_str}.png'))
+            plt.close()
+
+
+# TODO
+# todo: add outpath to config
+def plot_table_user_participation_counts(path) -> pd.DataFrame:
+    """Create table"""
+    df: pd.DataFrame = pd.read_csv(path).fillna('')
+    # remove aggregation rows
+    df = df[df['keyword'] != '']
+
+    # iterate
+    rows: List[Dict] = []
+    users = df['user.full_name'].unique()
+    for user in users:
+        df_i = df[df['user.full_name'] == user]
+        author_count = df_i[df_i['thread.role'] == 'author']['thread.count'].sum()
+        respondent_count = df_i[df_i['thread.role'] == 'respondent']['thread.count'].sum()
+        row = {
+            'user.full_name': user,
+            'author_count': author_count,
+            'respondent_count': respondent_count,
+            'tot_count': author_count + respondent_count,
+        }
+        rows.append(row)
+    df2 = pd.DataFrame(rows)
+    df2.to_csv('zulip_dataviz_table_user_activity.csv', index=False)
+    return df2
 
 
 def query_all_messages(
@@ -675,20 +766,25 @@ def _get_keyword_contexts(use_cached_keyword_inputs=False) -> Dict[str, List[str
     return keyword_contexts
 
 
-def run(analyze_only=False, use_cached_keyword_inputs=False):
+def run(analyze_only=False, analytical_tables_only=False, use_cached_keyword_inputs=False):
     """Run program"""
-    # Get inputs
-    keywords: TYPE_KEYWORDS_DICT = _get_keywords(use_cached_keyword_inputs)
-    kw_contexts: Dict[str, List[str]] = _get_keyword_contexts()
-    # Get messages
-    messages_matches_df: pd.DataFrame = query_categories(keywords) if not analyze_only else \
-        _load_cached_messages(CONFIG['results_cache_path_messages_matches'])
-    messages_all_df: pd.DataFrame = query_all_messages() if not analyze_only else \
-        _load_cached_messages(CONFIG['results_cache_path_messages_all'])
-    # Create reports
-    create_report_counts(df=messages_matches_df, category_keywords=keywords, kw_contexts=kw_contexts)
-    create_report_thread_length(df=messages_matches_df, category_keywords=keywords, kw_contexts=kw_contexts)
-    create_report_users(df_all=messages_all_df, df_matches=messages_matches_df)
+    if not analytical_tables_only:
+        # Get inputs
+        keywords: TYPE_KEYWORDS_DICT = _get_keywords(use_cached_keyword_inputs)
+        kw_contexts: Dict[str, List[str]] = _get_keyword_contexts()
+        # Get messages
+        messages_matches_df: pd.DataFrame = query_categories(keywords) if not analyze_only else \
+            _load_cached_messages(CONFIG['results_cache_path_messages_matches'])
+        messages_all_df: pd.DataFrame = query_all_messages() if not analyze_only else \
+            _load_cached_messages(CONFIG['results_cache_path_messages_all'])
+        # Create reports
+        # TODO: Performance: thread_length and users too slow. Once faster, remove `analytical_tables_only` arg
+        create_report_counts(df=messages_matches_df, category_keywords=keywords, kw_contexts=kw_contexts)
+        create_report_thread_length(df=messages_matches_df, category_keywords=keywords, kw_contexts=kw_contexts)
+        create_report_users(df_all=messages_all_df, df_matches=messages_matches_df)
+    # Create analytical tables for data visualizations
+    plot_table_user_participation_counts(CONFIG['outpath_report_users'])
+    plot_category_msg_counts_by_year()
 
 
 def cli():
@@ -698,6 +794,10 @@ def cli():
     parser.add_argument(
         '-a', '--analyze-only', required=False, action='store_true',
         help='If present, will perform analysis, but do no new queries.')
+    parser.add_argument(
+        '-p', '--plots-only', required=False, action='store_true',
+        help='If present, will create plots and sometimes tables for those plots, but do no queries, '
+             'nor create reports.')
     parser.add_argument(
         '-c', '--use-cached-keyword-inputs', required=False, action='store_true',
         help='If present, will not check GoogleSheets for updates to keyword related input data.')
