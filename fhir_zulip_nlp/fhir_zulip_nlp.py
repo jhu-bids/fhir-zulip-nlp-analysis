@@ -766,9 +766,9 @@ def _get_keyword_contexts(use_cached_keyword_inputs=False) -> Dict[str, List[str
     return keyword_contexts
 
 
-def run(analyze_only=False, analytical_tables_only=False, use_cached_keyword_inputs=False):
+def run(analyze_only=False, plots_only=False, use_cached_keyword_inputs=False):
     """Run program"""
-    if not analytical_tables_only:
+    if not plots_only:
         # Get inputs
         keywords: TYPE_KEYWORDS_DICT = _get_keywords(use_cached_keyword_inputs)
         kw_contexts: Dict[str, List[str]] = _get_keyword_contexts()
