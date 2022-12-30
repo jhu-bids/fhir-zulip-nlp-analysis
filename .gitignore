@@ -23,6 +23,7 @@ MANIFEST
 /*.json
 */cache/*
 !*/cache/.keep
+!*/cache/keywords.csv
 vsac_wrangler/data/cache/*
 !vsac_wrangler/data/cache/.keep
 /env/*
