@@ -1,7 +1,7 @@
 # HL7 FHIR Zulip chat NLP analysis
 Ad hoc NLP (Natural Language Processing) analysis of HL7 FHIR's online Zulip chat streams.
 
-## Management GoogleSheeet
+## Management GoogleSheet
 The program reads directly [from this Google Sheet](https://docs.google.com/spreadsheets/d/1OB0CEAkOhVTN71uIhzCo_iNaiD1B6qLqL7uwil5O22Q/). Allows for the management of:
 - Category keywords
 - User roles
@@ -16,6 +16,7 @@ The program reads directly [from this Google Sheet](https://docs.google.com/spre
    that says _"Download .zuliprc"_. Click that, and it will download a file. It might save the file under a different
    filename. If so, you should rename that `.zuliprc`. Place this file in the root directory of this cloned repository.
 4. From the repository directory, run: `python3 -m fhir_zulip_nlp`
+ - 
 
 ## Results
 After running, analysis reports will be generated and saved in the repository directory as CSV files with the name 
